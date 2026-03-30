@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Połączenie ze sterownikiem Elegant LED",
+        "description": "Podaj adres IP sterownika Elegant LED.",
+        "data": {
+          "host": "Adres IP"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nie udało się połączyć ze sterownikiem. Sprawdź adres IP i upewnij się, że urządzenie jest włączone."
+    },
+    "abort": {
+      "already_configured": "Ten sterownik jest już skonfigurowany."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opcje sterownika Elegant LED",
+        "description": "Konfiguracja synchronizacji i odpytywania.",
+        "data": {
+          "time_sync_enabled": "Włącz synchronizację czasu",
+          "time_sync_threshold": "Próg synchronizacji czasu",
+          "poll_enabled": "Włącz okresowe odpytywanie pełnego stanu",
+          "poll_interval": "Interwał odpytywania",
+          "debounce_enabled": "Włącz debounce po zewnętrznej zmianie",
+          "external_change_debounce": "Opóźnienie debounce"
+        },
+        "data_description": {
+          "time_sync_enabled": "Synchronizuj zegar sterownika gdy odbiega od HA.",
+          "time_sync_threshold": "Maksymalna dozwolona różnica czasu przed synchronizacją (2–60 s).",
+          "poll_enabled": "Okresowo pobieraj pełny stan ze sterownika jako zabezpieczenie.",
+          "poll_interval": "Jak często pobierać pełny stan (60–86400 s).",
+          "debounce_enabled": "Po wykryciu zewnętrznej zmiany (przeglądarka, pilot) pobierz pełny stan aby wykryć zmiany wielostrefowe.",
+          "external_change_debounce": "Czas oczekiwania po ostatniej zewnętrznej zmianie przed pobraniem (0,1–10,0 s)."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Elegant LED Controller",
+        "description": "Enter the IP address of your Elegant LED controller.",
+        "data": {
+          "host": "Host (IP address)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the controller. Check the IP address and ensure the device is powered on."
+    },
+    "abort": {
+      "already_configured": "This controller is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Elegant LED Controller Options",
+        "description": "Configure synchronization and polling settings.",
+        "data": {
+          "time_sync_enabled": "Enable time synchronization",
+          "time_sync_threshold": "Time sync threshold",
+          "poll_enabled": "Enable periodic full state polling",
+          "poll_interval": "Poll interval",
+          "debounce_enabled": "Enable debounce after external change",
+          "external_change_debounce": "Debounce delay"
+        },
+        "data_description": {
+          "time_sync_enabled": "Sync controller clock when it drifts from HA.",
+          "time_sync_threshold": "Maximum allowed time drift before syncing (2–60 s).",
+          "poll_enabled": "Periodically fetch full state from the controller as a safety net.",
+          "poll_interval": "How often to fetch full state (60–86400 s).",
+          "debounce_enabled": "After detecting an external change (browser, remote), fetch full state to catch multi-zone changes.",
+          "external_change_debounce": "Wait this long after the last external change before fetching (0.1–10.0 s)."
+        }
+      }
+    }
+  },
+  "services": {
+    "reset_zone_defaults": {
+      "name": "Reset zone to defaults",
+      "description": "Reset a zone to default settings (white neutral, no effects, full brightness).",
+      "fields": {
+        "zone_index": {
+          "name": "Zone index",
+          "description": "The zone index (0-23) to reset."
+        }
+      }
+    }
+  }
+}

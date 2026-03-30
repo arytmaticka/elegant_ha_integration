@@ -1,0 +1,14 @@
+reset_zone_defaults:
+  name: Reset zone to defaults
+  description: Reset a zone to default settings (white neutral, no effects, full brightness).
+  fields:
+    zone_index:
+      name: Zone index
+      description: The zone index (0-23) to reset.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 23
+          mode: box
+
