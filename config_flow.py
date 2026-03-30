@@ -53,7 +53,7 @@ from .coordinator import ElegantApiClient
 
 _LOGGER = logging.getLogger(__name__)
 
-ZEROCONF_API_PATH = "/api/info"
+ZEROCONF_API_PATH = "/zeroconfig"
 ZEROCONF_API_TIMEOUT = 10
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
