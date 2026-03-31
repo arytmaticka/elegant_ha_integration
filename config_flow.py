@@ -67,6 +67,13 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Elegant LED Controller."""
 
     VERSION = 1
+    
+    def __init__(self) -> None:
+        """Initialize."""
+        self._host: str = ""
+        self._port: int | None = None
+        self._name: str = ""
+        self._device_id: str = ""
 
     @staticmethod
     @callback
@@ -122,9 +129,31 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(device_id)
         self._abort_if_unique_id_configured(updates={CONF_HOST: host, CONF_PORT: port})
 
-        return self.async_create_entry(
-            title=discovery_info.name,
-            data={CONF_HOST: host, CONF_PORT: port},
+        # Zamiast od razu tworzyć wpis, zapisz dane i pokaż formularz potwierdzenia
+        self._host = host
+        self._port = port
+        self._name = discovery_info.name
+        self._device_id = device_id
+
+        return await self.async_step_zeroconf_confirm()
+
+    async def async_step_zeroconf_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm zeroconf discovery."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title=self._name,
+                data={CONF_HOST: self._host, CONF_PORT: self._port},
+            )
+
+        self._set_confirm_only()
+        return self.async_show_form(
+            step_id="zeroconf_confirm",
+            description_placeholders={
+                "name": self._name,
+                "host": self._host,
+            },
         )
 
     async def async_step_user(
