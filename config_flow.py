@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import aiohttp
 import voluptuous as vol
 
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -14,8 +16,9 @@ from homeassistant.config_entries import (
     OptionsFlow,
     OptionsFlowWithConfigEntry,
 )
-from homeassistant.const import CONF_HOST
+from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     BooleanSelector,
     NumberSelector,
@@ -50,6 +53,9 @@ from .coordinator import ElegantApiClient
 
 _LOGGER = logging.getLogger(__name__)
 
+ZEROCONF_API_PATH = "/zeroconfig"
+ZEROCONF_API_TIMEOUT = 10
+
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST, default=DEFAULT_HOST): str,
@@ -67,6 +73,59 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         """Get the options flow for this handler."""
         return ElegantOptionsFlow(config_entry)
+
+    async def async_step_zeroconf(
+        self, discovery_info: ZeroconfServiceInfo
+    ) -> ConfigFlowResult:
+        """Handle discovery via Zeroconf (mDNS)."""
+        host = discovery_info.host.rstrip(".")
+        port = discovery_info.port
+        properties = discovery_info.properties
+
+        _LOGGER.debug(
+            "Zeroconf discovered device: host=%s port=%s properties=%s",
+            host,
+            port,
+            properties,
+        )
+
+        device_id = properties.get("id")
+        if isinstance(device_id, bytes):
+            device_id = device_id.decode()
+
+        if not device_id:
+            _LOGGER.debug(
+                "No 'id' in TXT records for %s, fetching from HTTP API", host
+            )
+            try:
+                session = async_get_clientsession(self.hass)
+                async with session.get(
+                    f"http://{host}{ZEROCONF_API_PATH}",
+                    timeout=aiohttp.ClientTimeout(total=ZEROCONF_API_TIMEOUT),
+                ) as resp:
+                    resp.raise_for_status()
+                    info = await resp.json()
+                    device_id = str(info.get("id", ""))
+            except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+                _LOGGER.error(
+                    "Failed to fetch device ID from %s%s: %s",
+                    host,
+                    ZEROCONF_API_PATH,
+                    err,
+                )
+                return self.async_abort(reason="cannot_connect")
+
+        if not device_id:
+            _LOGGER.error("Could not determine device ID for %s", host)
+            return self.async_abort(reason="cannot_connect")
+
+        await self.async_set_unique_id(device_id)
+        self._abort_if_unique_id_configured(updates={CONF_HOST: host, CONF_PORT: port})
+
+        return self.async_create_entry(
+            title=discovery_info.name,
+            data={CONF_HOST: host, CONF_PORT: port},
+        )
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
