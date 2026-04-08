@@ -179,6 +179,7 @@ class ElegantLight(CoordinatorEntity[ElegantCoordinator], LightEntity):
             }
             self._attr_min_color_temp_kelvin = MIN_COLOR_TEMP_KELVIN
             self._attr_max_color_temp_kelvin = MAX_COLOR_TEMP_KELVIN
+            self._attr_entity_registry_enabled_default = True
         else:
             # Virtual zone (type 0): on/off only — serves as trigger for automations
             # Disabled by default, user can enable manually in HA UI
