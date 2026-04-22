@@ -10,7 +10,9 @@ from datetime import datetime
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+import aiohttp
 import websockets
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from websockets.exceptions import (
     ConnectionClosed,
     ConnectionClosedError,
@@ -39,8 +41,9 @@ _LOGGER = logging.getLogger(__name__)
 class ElegantApiClient:
     """WebSocket API client for Elegant LED Controller."""
 
-    def __init__(self, host: str) -> None:
+    def __init__(self, hass: HomeAssistant, host: str) -> None:
         """Initialize the API client."""
+        self._hass = hass
         self._host = host
         self._ws = None
         self._message_id: int = 0
@@ -51,6 +54,7 @@ class ElegantApiClient:
         self._connected = False
         self._zone_lock = asyncio.Lock()  # Serialize set_selected_zones + set_zone
         self._last_message_time: float = 0.0
+        self._controllers_cache: dict[str, Any] | list[Any] | None = None
 
     @property
     def connected(self) -> bool:
@@ -143,7 +147,7 @@ class ElegantApiClient:
 
         try:
             raw = json.dumps(msg, separators=(",", ":"))
-            _LOGGER.debug("TX: %s", raw)
+            # _LOGGER.debug("TX: %s", raw)
             await self._ws.send(raw)
             result = await asyncio.wait_for(future, timeout=10.0)
             return result
@@ -185,7 +189,7 @@ class ElegantApiClient:
             async for raw_msg in self._ws:
                 try:
                     msg = json.loads(raw_msg)
-                    _LOGGER.debug("RX: %s", raw_msg)
+                    # _LOGGER.debug("RX: %s", raw_msg)
                     self._last_message_time = time.time()
                     self._dispatch(msg)
                 except json.JSONDecodeError:
@@ -343,6 +347,63 @@ class ElegantApiClient:
             {"id": msg_id, "event": "change_memory", "data": index}
         )
 
+    async def async_get_controllers(self, *, force_refresh: bool = False) -> dict[str, Any] | list[Any]:
+        """Fetch /controllers.json once and cache it."""
+        if self._controllers_cache is not None and not force_refresh:
+            return self._controllers_cache
+
+        session = async_get_clientsession(self._hass)
+        url = f"http://{self._host}/controllers.json"
+
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            resp.raise_for_status()
+
+            try:
+                data = await resp.json()
+            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                # Fallback gdy serwer zwraca text/plain
+                text = await resp.text()
+                data = json.loads(text)
+
+        self._controllers_cache = data
+      
+        return data
+
+    def _pick_effect_name(self, effect: dict[str, Any]) -> str:
+        """Return localized effect name based on HA language."""
+        lang = (self._hass.config.language or "en").lower()  # np. "pl", "en"
+        # _LOGGER.debug("Picking effect name for lang=%s: %s", lang, effect)
+        preferred = "name_pl" if lang.startswith("pl") else "name_en"
+        return (
+            effect.get(preferred)
+            or effect.get("name_en")
+            or effect.get("name_pl")
+            or f"Effect {effect.get('id', '?')}"
+        )
+
+    async def async_get_zone_effects(self, zone) -> list[str]:
+        """Return available effects for a zone from controllers.json."""
+        controllers = await self.async_get_controllers()
+        data = zone.get("type", 0)
+        if not (data > 0):
+           data = 50
+        
+        effects = controllers.get(str(data),{'effects': []})
+        effects = effects.get("effects", []) if isinstance(effects, dict) else []
+        
+        # _LOGGER.debug("effects zone=%s type=%s value=%r", zone, type(effects).__name__, effects)
+
+        result: dict[int, str] = {}
+        i = 0
+        for e in effects:
+            if not isinstance(e, dict) or "id" not in e:
+                continue
+            # TODO: check if effect id is needed for anything
+            # result[int(e["id"])] = self._pick_effect_name(e)
+            result[i] = self._pick_effect_name(e)
+            i += 1
+        return result
+
 
 class ElegantCoordinator(DataUpdateCoordinator):
     """Coordinator for Elegant LED Controller.
@@ -364,7 +425,7 @@ class ElegantCoordinator(DataUpdateCoordinator):
             _LOGGER,
             name=DOMAIN,
         )
-        self.api = ElegantApiClient(host)
+        self.api = ElegantApiClient(hass, host)
         self.api.register_push_handler(self._handle_push_event)
         self.api.set_connection_lost_callback(self._on_connection_lost)
         self._host = host
@@ -496,11 +557,23 @@ class ElegantCoordinator(DataUpdateCoordinator):
                     "time_scene": 15,
                     "roll_effect": 1,
                     "scenes": [2, 0, 0, 0],
+                    "available_effects": [],  # Dodaj tutaj
                 }
             )
 
-        await self.api.set_time(self.hass.config.time_zone)
+        # Pobierz listę efektów dla każdej strefy
+        for idx, zone in enumerate(self._zones):
+            try:
+                effects = await self.api.async_get_zone_effects(zone)
+                zone["available_effects"] = effects
+                # _LOGGER.debug("Zone %d effects: %s", idx, effects)
+            except Exception as err:
+                _LOGGER.warning("Failed to fetch effects for zone %d: %s", idx, err)
+                zone["available_effects"] = []
 
+        await self.api.set_time(self.hass.config.time_zone)
+        
+        # _LOGGER.warning("Zones %r", self._zones)
         # Update coordinator data
         self.async_set_updated_data({"zones": self._zones})
 

@@ -7,6 +7,10 @@
         "data": {
           "host": "Host (IP address)"
         }
+      },
+      "zeroconf_confirm": {
+        "title": "Confirm Device Discovery",
+        "description": "Found device: {name} at {host}"
       }
     },
     "error": {

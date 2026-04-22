@@ -6,8 +6,10 @@ import logging
 from typing import Any
 
 from homeassistant.components.light import (
+    ATTR_EFFECT,
     ColorMode,
     LightEntity,
+    LightEntityFeature,
 )
 
 # Light attribute keys — defined as strings for compatibility
@@ -142,7 +144,38 @@ def _hs_to_rgb(hue: float, saturation: float) -> tuple[int, int, int]:
     )
 
 
-class ElegantLight(CoordinatorEntity[ElegantCoordinator], LightEntity):
+def _decode_scenes_to_effect_ids(scenes: list[int] | tuple[int, ...]) -> list[int]:
+    """Decode 4x uint32 bitfield into sorted list of enabled effect IDs (0..127)."""
+    if not isinstance(scenes, (list, tuple)):
+        return []
+
+    effect_ids: list[int] = []
+    for word_index, raw_word in enumerate(scenes[:4]):
+        try:
+            word = int(raw_word) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            continue
+
+        for bit_index in range(32):
+            if word & (1 << bit_index):
+                effect_ids.append(word_index * 32 + bit_index)
+
+    return effect_ids
+
+
+def _encode_effect_id_to_scenes(effect_id: int) -> list[int]:
+    """Encode single effect_id (0..127) into 4x uint32 bitfield."""
+    if effect_id < 0 or effect_id > 127:
+        raise ValueError(f"effect_id out of range: {effect_id}")
+
+    scenes = [0, 0, 0, 0]
+    word_idx = effect_id // 32
+    bit_idx = effect_id % 32
+    scenes[word_idx] = 1 << bit_idx
+    return scenes
+
+
+class ElegantLight(CoordinatorEntity, LightEntity):
     """Representation of an Elegant LED zone as a light entity."""
 
     _attr_has_entity_name = True
@@ -260,9 +293,63 @@ class ElegantLight(CoordinatorEntity[ElegantCoordinator], LightEntity):
         attrs["elegant_color_mode"] = self._zone.get("color_mode", 0)
         return attrs
 
+    @property
+    def supported_features(self) -> LightEntityFeature:
+        features = LightEntityFeature(0)
+
+        if self._zone_type != 0:
+            features |= LightEntityFeature.TRANSITION
+
+            effects = self._zone.get("available_effects", {})
+            if effects:
+                features |= LightEntityFeature.EFFECT
+
+        _LOGGER.debug("Supported features for zone_id=%d: %s", self._idx, features)
+
+        return features
+
+    @property
+    def effect_list(self) -> list[str]:
+        effects: dict[int, str] = self._zone.get("available_effects", {})
+        _LOGGER.debug("Effect list for zone_id=%d: %s", self._idx, effects)
+        
+        return list(effects.values())
+
+    @property
+    def effect(self) -> str | None:
+        effects: dict[int, str] = self._zone.get("available_effects", {})
+        scenes = self._zone.get("scenes")
+        if not scenes:
+            return None
+
+        enabled_effect_ids = _decode_scenes_to_effect_ids(scenes)
+        if not enabled_effect_ids:
+            return None
+
+        effect_id = min(enabled_effect_ids)
+
+        return effects.get(effect_id) or effects.get(str(effect_id))
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on with optional parameters."""
         params: dict[str, Any] = {}
+        
+        if ATTR_EFFECT in kwargs:
+            selected_name = kwargs[ATTR_EFFECT]
+
+            effects_map = self._zone.get("available_effects", {})
+            effect_id = next(
+                (int(eid) for eid, name in effects_map.items() if name == selected_name),
+                None,
+            )
+
+            if effect_id is None:
+                _LOGGER.warning("Effect not found: %s", selected_name)
+            else:
+                scenes = _encode_effect_id_to_scenes(effect_id)
+                #_LOGGER.debug("Setting effect '%s' (id %d) for zone %d: scenes=%s", selected_name, effect_id, self._idx, scenes)
+                params["scenes"] = scenes  
+
 
         if ATTR_BRIGHTNESS in kwargs:
             # HA 0-255 -> Elegant 0-100
@@ -293,6 +380,7 @@ class ElegantLight(CoordinatorEntity[ElegantCoordinator], LightEntity):
         params["is_on"] = True
 
         await self.coordinator.async_set_zone(self._idx, **params)
+        # await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the light off."""

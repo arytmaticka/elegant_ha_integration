@@ -7,13 +7,19 @@
         "data": {
           "host": "Host (IP address)"
         }
+      },
+      "zeroconf_confirm": {
+        "title": "Confirm Discovery",
+        "description": "Found device: {name} at {host}"
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to the controller. Check the IP address and ensure the device is powered on."
+      "cannot_connect": "Failed to connect to the controller. Check the IP address and ensure the device is powered on.",
+      "invalid_host": "Invalid host address"
     },
     "abort": {
-      "already_configured": "This controller is already configured."
+      "already_configured": "This controller is already configured.",
+      "cannot_connect": "Failed to connect"
     }
   },
   "options": {
