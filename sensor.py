@@ -27,7 +27,7 @@ def _hub_device_info(coordinator: ElegantCoordinator) -> DeviceInfo:
     """Return DeviceInfo for the main controller hub."""
     return DeviceInfo(
         identifiers={(DOMAIN, coordinator.mac)},
-        name=f"Elegant LED {coordinator.user_settings.get('sn', '')}",
+        name=f"Elegant-{coordinator.user_settings.get('sn', '')[-4:]}",
         manufacturer="Elegant",
         model="LED Controller",
         configuration_url=f"http://{coordinator.host}",
