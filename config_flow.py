@@ -129,7 +129,6 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(device_id)
         self._abort_if_unique_id_configured(updates={CONF_HOST: host, CONF_PORT: port})
 
-        # Zamiast od razu tworzyć wpis, zapisz dane i pokaż formularz potwierdzenia
         self._host = host
         self._port = port
         self._name = discovery_info.name

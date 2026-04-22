@@ -12,3 +12,38 @@ reset_zone_defaults:
           max: 23
           mode: box
 
+set_zone_effects:
+  name: Set zone effects
+  description: >
+    Set one or more effects on a zone. Provide either a list of effect
+    names (resolved through that zone's dictionary) or a list of raw
+    effect IDs (bit positions 0–127). IDs are preferred when controlling
+    zones of different controller types, because names are NOT shared
+    across types. Any previously active effects are replaced.
+  fields:
+    zone_index:
+      name: Zone index
+      description: The zone index (0-23) to set effects on.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 23
+          mode: box
+    effects:
+      name: Effects (names)
+      description: >
+        List of effect names to activate, resolved via the zone's own
+        effect dictionary. Ignored if `effect_ids` is provided.
+      required: false
+      selector:
+        object:
+    effect_ids:
+      name: Effect IDs
+      description: >
+        List of raw effect IDs (bit positions 0–127). Preferred — works
+        across controller types without name lookups.
+      required: false
+      selector:
+        object:
+

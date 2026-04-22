@@ -144,13 +144,26 @@ def _hs_to_rgb(hue: float, saturation: float) -> tuple[int, int, int]:
     )
 
 
+# Scenes bitfield: one bit per effect ID. Minimum 4 uint32 words (128 IDs)
+# for backward compatibility with older controllers; extended up to
+# SCENES_MAX_WORDS for controllers that define effects with higher IDs
+# (e.g. type 80 has effects up to ID 182).
+SCENES_MIN_WORDS = 4
+SCENES_MAX_WORDS = 8      # supports effect IDs 0..255
+SCENES_MAX_ID = SCENES_MAX_WORDS * 32 - 1
+
+
 def _decode_scenes_to_effect_ids(scenes: list[int] | tuple[int, ...]) -> list[int]:
-    """Decode 4x uint32 bitfield into sorted list of enabled effect IDs (0..127)."""
+    """Decode a scenes bitfield into a sorted list of enabled effect IDs.
+
+    Scans ALL elements of the incoming array (up to SCENES_MAX_WORDS),
+    not only the first 4 — modern controllers may send extended arrays.
+    """
     if not isinstance(scenes, (list, tuple)):
         return []
 
     effect_ids: list[int] = []
-    for word_index, raw_word in enumerate(scenes[:4]):
+    for word_index, raw_word in enumerate(scenes[:SCENES_MAX_WORDS]):
         try:
             word = int(raw_word) & 0xFFFFFFFF
         except (TypeError, ValueError):
@@ -164,18 +177,32 @@ def _decode_scenes_to_effect_ids(scenes: list[int] | tuple[int, ...]) -> list[in
 
 
 def _encode_effect_id_to_scenes(effect_id: int) -> list[int]:
-    """Encode single effect_id (0..127) into 4x uint32 bitfield."""
-    if effect_id < 0 or effect_id > 127:
-        raise ValueError(f"effect_id out of range: {effect_id}")
+    """Encode a single effect_id into a scenes bitfield (4..8 uint32 words)."""
+    return _encode_effect_ids_to_scenes([effect_id])
 
-    scenes = [0, 0, 0, 0]
-    word_idx = effect_id // 32
-    bit_idx = effect_id % 32
-    scenes[word_idx] = 1 << bit_idx
+
+def _encode_effect_ids_to_scenes(effect_ids: list[int]) -> list[int]:
+    """Encode a list of effect_ids into a scenes bitfield.
+
+    Output array size is at least SCENES_MIN_WORDS, and grows up to
+    SCENES_MAX_WORDS to accommodate higher-ID effects. Keeping the
+    minimum preserves the on-wire shape for older controllers.
+    """
+    # Determine required size from the largest ID (default to minimum)
+    max_id = max(effect_ids) if effect_ids else 0
+    if max_id < 0 or max_id > SCENES_MAX_ID:
+        raise ValueError(f"effect_id out of range: {max_id}")
+    words_needed = max(SCENES_MIN_WORDS, max_id // 32 + 1)
+
+    scenes = [0] * words_needed
+    for effect_id in effect_ids:
+        if effect_id < 0 or effect_id > SCENES_MAX_ID:
+        raise ValueError(f"effect_id out of range: {effect_id}")
+        scenes[effect_id // 32] |= 1 << (effect_id % 32)
     return scenes
 
 
-class ElegantLight(CoordinatorEntity, LightEntity):
+class ElegantLight(CoordinatorEntity[ElegantCoordinator], LightEntity):
     """Representation of an Elegant LED zone as a light entity."""
 
     _attr_has_entity_name = True
@@ -212,7 +239,6 @@ class ElegantLight(CoordinatorEntity, LightEntity):
             }
             self._attr_min_color_temp_kelvin = MIN_COLOR_TEMP_KELVIN
             self._attr_max_color_temp_kelvin = MAX_COLOR_TEMP_KELVIN
-            self._attr_entity_registry_enabled_default = True
         else:
             # Virtual zone (type 0): on/off only — serves as trigger for automations
             # Disabled by default, user can enable manually in HA UI
@@ -292,6 +318,55 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         }
         # Include raw elegant color_mode for debugging/automations
         attrs["elegant_color_mode"] = self._zone.get("color_mode", 0)
+
+        effects_map: dict[int, str] = self._zone.get("available_effects", {})
+        roll_map: dict[int, str] = self._zone.get("available_roll_effects", {})
+
+        # --- Regular (bitfield) effects — consumed by custom card ----------
+        # Effect ID → name mapping for THIS zone (per controller type).
+        # Keys become strings after JSON serialization — card handles both.
+        attrs["effect_names"] = {
+            str(k): v for k, v in effects_map.items()
+        }
+
+        # Active effect IDs (real IDs == bit positions in scenes)
+        scenes = self._zone.get("scenes")
+        if scenes:
+            active_ids = _decode_scenes_to_effect_ids(scenes)
+        else:
+            active_ids = []
+        attrs["active_effect_ids"] = active_ids
+
+        # Back-compat: list of active effect NAMES (used by old card and
+        # generic HA integrations). Falls back to "Effect <id>" when the
+        # name is missing for a given ID in this zone's dictionary.
+        active_names: list[str] = []
+        for eid in sorted(active_ids):
+            name = effects_map.get(eid) or effects_map.get(str(eid))
+            active_names.append(name if name else f"Effect {eid}")
+        attrs["active_effects"] = active_names
+
+        # --- Roll effects — single-choice integer ID -----------------------
+        # Only expose roll_effect_* attributes when this zone's controller
+        # type actually defines roll effects. Otherwise the default
+        # `roll_effect: 1` stored in the zone dict would misleadingly
+        # show as "Roll 1" in the attributes panel.
+        if roll_map:
+            attrs["roll_effect_names"] = {
+                str(k): v for k, v in roll_map.items()
+            }
+            roll_id = self._zone.get("roll_effect")
+            if isinstance(roll_id, int):
+                attrs["active_roll_effect_id"] = roll_id
+                attrs["active_roll_effect"] = (
+                    roll_map.get(roll_id)
+                    or roll_map.get(str(roll_id))
+                    or f"Roll {roll_id}"
+                )
+            else:
+                attrs["active_roll_effect_id"] = None
+                attrs["active_roll_effect"] = None
+
         return attrs
 
     @property
@@ -301,8 +376,10 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         if self._zone_type != 0:
             features |= LightEntityFeature.TRANSITION
 
-            effects = self._zone.get("available_effects", {})
-            if effects:
+            # Expose EFFECT feature when either regular or roll effects exist.
+            if self._zone.get("available_effects") or self._zone.get(
+                "available_roll_effects"
+            ):
                 features |= LightEntityFeature.EFFECT
 
         _LOGGER.debug("Supported features for zone_id=%d: %s", self._idx, features)
@@ -310,14 +387,39 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         return features
 
     @property
+    def _use_roll_as_primary(self) -> bool:
+        """Roll effects drive the standard HA `effect` selector when present.
+
+        When a zone has `effects_roll` in controllers.json, those effects
+        fit HA's single-choice model perfectly (one integer per zone).
+        The regular multi-select bitfield effects stay accessible only
+        through the custom `elegant-effects-card`.
+        """
+        return bool(self._zone.get("available_roll_effects"))
+
+    @property
     def effect_list(self) -> list[str]:
+        if self._use_roll_as_primary:
+            roll_map: dict[int, str] = self._zone.get("available_roll_effects", {})
+            return list(roll_map.values())
         effects: dict[int, str] = self._zone.get("available_effects", {})
-        _LOGGER.debug("Effect list for zone_id=%d: %s", self._idx, effects)
-        
         return list(effects.values())
 
     @property
     def effect(self) -> str | None:
+        # --- Roll-as-primary: return the single active roll-effect name ---
+        if self._use_roll_as_primary:
+            roll_map: dict[int, str] = self._zone.get("available_roll_effects", {})
+            roll_id = self._zone.get("roll_effect")
+            if not isinstance(roll_id, int):
+                return None
+            return (
+                roll_map.get(roll_id)
+                or roll_map.get(str(roll_id))
+                or None
+            )
+
+        # --- Bitfield effects: comma-joined active names (legacy path) ----
         effects: dict[int, str] = self._zone.get("available_effects", {})
         scenes = self._zone.get("scenes")
         if not scenes:
@@ -327,9 +429,15 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         if not enabled_effect_ids:
             return None
 
-        effect_id = min(enabled_effect_ids)
+        names = []
+        for eid in sorted(enabled_effect_ids):
+            name = effects.get(eid) or effects.get(str(eid))
+            if name:
+                names.append(name)
 
-        return effects.get(effect_id) or effects.get(str(effect_id))
+        if not names:
+            return None
+        return ", ".join(names)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on with optional parameters."""
@@ -338,6 +446,23 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         if ATTR_EFFECT in kwargs:
             selected_name = kwargs[ATTR_EFFECT]
 
+            if self._use_roll_as_primary:
+                # Roll effect is a single integer — resolve by name,
+                # write to `roll_effect` field.
+                roll_map = self._zone.get("available_roll_effects", {})
+                roll_id = next(
+                    (int(k) for k, v in roll_map.items() if v == selected_name),
+                    None,
+                )
+                if roll_id is None:
+                    _LOGGER.warning(
+                        "Roll effect not found: %s (zone %d)",
+                        selected_name, self._idx,
+                    )
+                else:
+                    params["roll_effect"] = roll_id
+            else:
+                # Regular bitfield effect — set a single bit
             effects_map = self._zone.get("available_effects", {})
             effect_id = next(
                 (int(eid) for eid, name in effects_map.items() if name == selected_name),
@@ -348,7 +473,6 @@ class ElegantLight(CoordinatorEntity, LightEntity):
                 _LOGGER.warning("Effect not found: %s", selected_name)
             else:
                 scenes = _encode_effect_id_to_scenes(effect_id)
-                #_LOGGER.debug("Setting effect '%s' (id %d) for zone %d: scenes=%s", selected_name, effect_id, self._idx, scenes)
                 params["scenes"] = scenes  
 
 
@@ -381,7 +505,6 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         params["is_on"] = True
 
         await self.coordinator.async_set_zone(self._idx, **params)
-        # await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the light off."""
@@ -402,6 +525,32 @@ class ElegantLight(CoordinatorEntity, LightEntity):
             color_saturation=DEFAULT_COLOR_SATURATION,
             bright=DEFAULT_BRIGHTNESS,
         )
+
+    async def async_set_effects(self, effect_names: list[str]) -> None:
+        """Set multiple effects on this zone by their names."""
+        effects_map: dict[int, str] = self._zone.get("available_effects", {})
+
+        effect_ids: list[int] = []
+        for name in effect_names:
+            eid = next(
+                (int(k) for k, v in effects_map.items() if v == name),
+                None,
+            )
+            if eid is None:
+                _LOGGER.warning("Effect not found: %s (zone %d)", name, self._idx)
+            else:
+                effect_ids.append(eid)
+
+        if not effect_ids:
+            _LOGGER.warning("No valid effects to set for zone %d", self._idx)
+            return
+
+        scenes = _encode_effect_ids_to_scenes(effect_ids)
+        _LOGGER.debug(
+            "Setting %d effects for zone %d: %s -> scenes=%s",
+            len(effect_ids), self._idx, effect_names, scenes,
+        )
+        await self.coordinator.async_set_zone(self._idx, scenes=scenes)
 
     @callback
     def _handle_coordinator_update(self) -> None:

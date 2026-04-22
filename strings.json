@@ -56,6 +56,24 @@
           "description": "The zone index (0-23) to reset."
         }
       }
+    },
+    "set_zone_effects": {
+      "name": "Set zone effects",
+      "description": "Set one or more effects on a zone. Prefer effect_ids when possible — names are not shared across controller types.",
+      "fields": {
+        "zone_index": {
+          "name": "Zone index",
+          "description": "The zone index (0-23) to set effects on."
+        },
+        "effects": {
+          "name": "Effects (names)",
+          "description": "List of effect names resolved via zone's dictionary. Ignored if effect_ids is provided."
+        },
+        "effect_ids": {
+          "name": "Effect IDs",
+          "description": "List of raw effect IDs (0-127). Preferred — works across controller types."
+        }
+      }
     }
   }
 }

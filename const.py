@@ -38,10 +38,13 @@ RECONNECT_MAX_DELAY = 60
 
 # Service names
 SERVICE_RESET_ZONE_DEFAULTS = "reset_zone_defaults"
+SERVICE_SET_ZONE_EFFECTS = "set_zone_effects"
 
 # Attribute names
 ATTR_ZONE_INDEX = "zone_index"
 ATTR_ZONE_TYPE = "zone_type"
+ATTR_EFFECTS = "effects"
+ATTR_EFFECT_IDS = "effect_ids"
 
 # Time sync options
 CONF_TIME_SYNC_ENABLED = "time_sync_enabled"
