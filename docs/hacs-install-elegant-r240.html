@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jak zainstalować integrację Elegant R240 w HACS</title>
+  <meta name="description" content="Instrukcja krok po kroku: instalacja integracji Elegant R240 w HACS i dodanie jej w Home Assistant.">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --text: #172033;
+      --muted: #5f6b7a;
+      --accent: #03a9f4;
+      --accent-dark: #0277bd;
+      --border: #dce4ee;
+      --code: #eef6fc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      line-height: 1.65;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .page {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 40px 20px 72px;
+    }
+    header {
+      padding: 48px;
+      border-radius: 28px;
+      color: #fff;
+      background: linear-gradient(135deg, #0f172a 0%, #0b5f8f 55%, #03a9f4 100%);
+      box-shadow: 0 24px 70px rgba(15, 23, 42, .24);
+    }
+    h1 {
+      margin: 0 0 16px;
+      font-size: clamp(2.1rem, 5vw, 4rem);
+      line-height: 1.05;
+      letter-spacing: -.04em;
+    }
+    header p {
+      max-width: 760px;
+      margin: 0;
+      font-size: 1.18rem;
+      color: rgba(255,255,255,.9);
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 26px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid rgba(255,255,255,.22);
+      border-radius: 999px;
+      background: rgba(255,255,255,.12);
+      backdrop-filter: blur(8px);
+      font-weight: 700;
+      font-size: .92rem;
+    }
+    main { margin-top: 28px; }
+    .notice, .toc, .step {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: 0 12px 38px rgba(15, 23, 42, .08);
+    }
+    .notice, .toc { padding: 24px 28px; margin-bottom: 24px; }
+    .notice strong { color: var(--accent-dark); }
+    .toc ol { columns: 2; gap: 40px; padding-left: 22px; margin-bottom: 0; }
+    .toc a { color: var(--accent-dark); text-decoration: none; font-weight: 700; }
+    .toc a:hover { text-decoration: underline; }
+    .step {
+      margin: 28px 0;
+      overflow: hidden;
+    }
+    .step-content { padding: 28px 32px 16px; }
+    .step h2 {
+      margin: 0 0 12px;
+      font-size: clamp(1.55rem, 3vw, 2.25rem);
+      line-height: 1.2;
+      letter-spacing: -.025em;
+    }
+    .step-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 42px;
+      height: 42px;
+      margin-right: 12px;
+      border-radius: 14px;
+      color: #fff;
+      background: var(--accent);
+      font-weight: 900;
+      vertical-align: middle;
+    }
+    .screenshot {
+      width: 100%;
+      display: block;
+      border-top: 1px solid var(--border);
+      background: #0f172a;
+    }
+    code {
+      padding: .14rem .35rem;
+      border-radius: .45rem;
+      background: var(--code);
+      color: #063b5a;
+      font-weight: 700;
+      word-break: break-word;
+    }
+    .tip {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--accent);
+      border-radius: 12px;
+      background: #f0f9ff;
+      color: #25445c;
+    }
+    footer {
+      margin-top: 36px;
+      padding: 24px 28px;
+      color: var(--muted);
+      text-align: center;
+    }
+    @media (max-width: 760px) {
+      .page { padding: 22px 12px 48px; }
+      header { padding: 32px 24px; border-radius: 22px; }
+      .toc ol { columns: 1; }
+      .step-content { padding: 22px 20px 12px; }
+    }
+  </style>
+</head>
+<body>
+  <article class="page">
+    <header>
+      <h1>Jak zainstalować integrację Elegant R240 w HACS</h1>
+      <p>Gotowa instrukcja na bloga: prowadzi od dodania repozytorium w HACS, przez pobranie integracji, aż po skonfigurowanie mostka Elegant R240 w Home Assistant.</p>
+      <div class="meta" aria-label="Informacje o instrukcji">
+        <span class="badge">Home Assistant</span>
+        <span class="badge">HACS</span>
+        <span class="badge">Elegant R240</span>
+        <span class="badge">10 kroków</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="notice" aria-label="Wymagania wstępne">
+        <p><strong>Przed rozpoczęciem:</strong> upewnij się, że HACS jest już zainstalowany w Home Assistant i masz dostęp administracyjny do panelu. Będziesz też potrzebować adresu repozytorium:</p>
+        <p><code>https://github.com/arytmaticka/elegant_ha_integration</code></p>
+        <p>Zrzuty ekranowe w tym artykule są ilustracyjnymi makietami przygotowanymi do publikacji. Układ HACS może delikatnie różnić się zależnie od wersji Home Assistant/HACS.</p>
+      </section>
+
+      <nav class="toc" aria-label="Spis treści">
+        <strong>Spis kroków</strong>
+        <ol>
+          <li><a href="#krok-1">Otwórz HACS</a></li>
+          <li><a href="#krok-2">Wybierz niestandardowe repozytoria</a></li>
+          <li><a href="#krok-3">Wklej adres repozytorium</a></li>
+          <li><a href="#krok-4">Dodaj repozytorium</a></li>
+          <li><a href="#krok-5">Wyszukaj Elegant R240</a></li>
+          <li><a href="#krok-6">Pobierz integrację</a></li>
+          <li><a href="#krok-7">Uruchom ponownie Home Assistant</a></li>
+          <li><a href="#krok-8">Dodaj integrację</a></li>
+          <li><a href="#krok-9">Skonfiguruj mostek</a></li>
+          <li><a href="#krok-10">Sprawdź wynik</a></li>
+        </ol>
+      </nav>
+
+      <section id="krok-1" class="step">
+        <div class="step-content">
+          <h2><span class="step-number">1</span>Otwórz HACS</h2>
+          <p>W panelu Home Assistant kliknij pozycję <strong>HACS</strong> w menu bocznym. Jeżeli nie widzisz tej pozycji, sprawdź, czy HACS jest poprawnie zainstalowany i czy zalogowano się na konto z uprawnieniami administratora.</p>
+        </div>
+        <img class="screenshot" src="assets/hacs-install/01-open-hacs.svg" alt="Panel Home Assistant z podświetloną pozycją HACS i menu z trzema kropkami" loading="lazy">
+      </section>
+
+      <section id="krok-2" class="step">
+        <div class="step-content">
+          <h2><span class="step-number">2</span>Wybierz „Niestandardowe repozytoria”</h2>
+          <p>W prawym górnym rogu HACS kliknij menu z trzema kropkami, a następnie wybierz opcję <strong>Niestandardowe repozytoria</strong>.</p>
+        </div>
+        <img class="screenshot" src="assets/hacs-install/02-custom-repositories.svg" alt="Menu HACS z podświetloną opcją Niestandardowe repozytoria" loading="lazy">
+      </section>
+
+      <section id="krok-3" class="step">
+        <div class="step-content">
+          <h2><span class="step-number">3</span>Wklej adres repozytorium</h2>
+          <p>W polu <strong>Repozytorium</strong> wklej adres <code>https://github.com/arytmaticka/elegant_ha_integration</code>. W polu <strong>Typ</strong> wybierz <strong>Integracja</strong>.</p>
+          <div class="tip">Jeżeli HACS pokazuje ostrzeżenie o niestandardowym repozytorium, potwierdź je tylko wtedy, gdy adres repozytorium jest wpisany dokładnie tak jak powyżej.</div>
+        </div>
+        <img class="screenshot" src="assets/hacs-install/03-add-repository.svg" alt="Formularz dodawania niestandardowego repozytorium z adresem Elegant R240 i typem Integracja" loading="lazy">
+      </section>
+
+      <section id="krok-4" class="step">
+        <div class="step-content">
+          <h2><span class="step-number">4</span>Dodaj repozytorium</h2>
+          <p>Kliknij przycisk <strong>Dodaj</strong>. Po chwili HACS powinien zapisać repozytorium i umożliwić wyszukanie integracji Elegant R240.</p>
+        </div>
+        <img class="screenshot" src="assets/hacs-install/04-click-add.svg" alt="Przycisk Dodaj w formularzu niestandardowego repozytorium HACS" loading="lazy">
+      </section>
+
+      <section id="krok-5" class="step">
+        <div class="step-content">
+          <h2><span class="step-number">5</span>Wyszukaj „Elegant R240”</h2>
+          <p>Wróć do listy integracji HACS i wpisz <strong>Elegant R240</strong> w wyszukiwarce. Otwórz znalezioną integrację.</p>
+        </div>
+        <img class="screenshot" src="assets/hacs-install/05-search-elegant.svg" alt="Wyniki wyszukiwania HACS z integracją Elegant R240" loading="lazy">
+      </section>
+
+      <section id="krok-6" class="step">
+        <div class="step-content">
+          <h2><span class="step-number">6</span>Pobierz integrację</h2>
+          <p>Na ekranie integracji kliknij <strong>Pobierz</strong>. HACS skopiuje pliki integracji do katalogu <code>custom_components/elegant_r240</code> w konfiguracji Home Assistant.</p>
+        </div>
+        <img class="screenshot" src="assets/hacs-install/06-download.svg" alt="Widok integracji Elegant R240 w HACS z przyciskiem Pobierz" loading="lazy">
+      </section>
+
+      <section id="krok-7" class="step">
+        <div class="step-content">
+          <h2><span class="step-number">7</span>Uruchom ponownie Home Assistant</h2>
+          <p>Po instalacji wykonaj restart Home Assistant. Najczęściej zrobisz to w ścieżce <strong>Ustawienia → System → Restart</strong>. Restart jest potrzebny, aby Home Assistant załadował nową integrację.</p>
+        </div>
+        <img class="screenshot" src="assets/hacs-install/07-restart.svg" alt="Ekran ustawień Home Assistant z podświetlonym przyciskiem Uruchom ponownie" loading="lazy">
+      </section>
+
+      <section id="krok-8" class="step">
+        <div class="step-content">
+          <h2><span class="step-number">8</span>Dodaj integrację w Home Assistant</h2>
+          <p>Po restarcie przejdź do <strong>Ustawienia → Urządzenia i usługi</strong>, kliknij <strong>Dodaj integrację</strong> i wyszukaj <strong>Elegant R240</strong>.</p>
+        </div>
+        <img class="screenshot" src="assets/hacs-install/08-add-integration.svg" alt="Ekran dodawania integracji w Home Assistant z pozycją Elegant R240" loading="lazy">
+      </section>
+
+      <section id="krok-9" class="step">
+        <div class="step-content">
+          <h2><span class="step-number">9</span>Skonfiguruj mostek Elegant R240</h2>
+          <p>Wpisz host lub adres IP mostka R240, jeżeli integracja nie uzupełniła go automatycznie. Następnie kliknij <strong>Wyślij</strong>.</p>
+          <div class="tip">Dla stabilnej pracy warto przypisać mostkowi stały adres IP w routerze lub DHCP.</div>
+        </div>
+        <img class="screenshot" src="assets/hacs-install/09-configure.svg" alt="Formularz konfiguracji Elegant R240 z polem adresu IP mostka" loading="lazy">
+      </section>
+
+      <section id="krok-10" class="step">
+        <div class="step-content">
+          <h2><span class="step-number">10</span>Sprawdź urządzenia i encje</h2>
+          <p>Po poprawnej konfiguracji Home Assistant pokaże urządzenie Elegant R240 oraz powiązane encje, takie jak światła i sensory. Możesz teraz dodać je do dashboardu lub automatyzacji.</p>
+        </div>
+        <img class="screenshot" src="assets/hacs-install/10-success.svg" alt="Ekran sukcesu konfiguracji Elegant R240 w Home Assistant" loading="lazy">
+      </section>
+    </main>
+
+    <footer>
+      <p>Instrukcja przygotowana dla integracji Elegant R240. W razie problemów sprawdź logi Home Assistant oraz poprawność adresu IP mostka.</p>
+    </footer>
+  </article>
+</body>
+</html>
