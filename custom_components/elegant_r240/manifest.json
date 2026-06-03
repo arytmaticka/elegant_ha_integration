@@ -1,7 +1,7 @@
 {
   "domain": "elegant",
   "name": "Elegant LED Controller",
-  "codeowners": [],
+  "codeowners": ["@arytmaticka"],
   "config_flow": true,
   "dependencies": ["frontend"],
   "documentation": "",
