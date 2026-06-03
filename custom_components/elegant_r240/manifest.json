@@ -1,9 +1,9 @@
 {
-  "domain": "elegant",
-  "name": "Elegant LED Controller",
+  "domain": "elegant_r240",
+  "name": "Elegant R240",
   "codeowners": ["@arytmaticka"],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": ["frontend"],
   "documentation": "",
   "iot_class": "local_push",
   "requirements": ["websockets>=12.0"],

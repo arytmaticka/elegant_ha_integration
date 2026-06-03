@@ -25,8 +25,17 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    ATTR_ACTIVE_MODE,
+    ATTR_ACTIVE_MODE_ID,
+    ATTR_AVAILABLE_MODES,
+    ATTR_EFFECT_FLAGS,
     ATTR_ZONE_INDEX,
     ATTR_ZONE_TYPE,
+    COLOR_MODE_AUTO_CHANGE,
+    COLOR_MODE_DOUBLE,
+    COLOR_MODE_RAINBOW,
+    COLOR_MODE_SINGLE,
+    COLOR_MODE_TRIPLE,
     DEFAULT_BRIGHTNESS,
     DEFAULT_COLOR,
     DEFAULT_COLOR_HUE,
@@ -38,10 +47,25 @@ from .const import (
     MAX_COLOR_TEMP_KELVIN,
     MAX_ZONES,
     MIN_COLOR_TEMP_KELVIN,
+    MODE_KEY_AUTO_CHANGE,
+    MODE_KEY_COLOR,
+    MODE_KEY_DOUBLE,
+    MODE_KEY_RAINBOW,
+    MODE_KEY_TRIPLE,
+    MODE_KEY_WHITE,
+    MODE_NAMES_EN,
+    MODE_NAMES_PL,
 )
 from .coordinator import ElegantCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _controller_name(coordinator: ElegantCoordinator) -> str:
+    """Return a stable display name for the controller device."""
+    serial = coordinator.user_settings.get("sn")
+    serial_text = "" if serial is None else str(serial)
+    return f"Elegant-{serial_text[-4:]}" if serial_text else "Elegant"
 
 
 async def async_setup_entry(
@@ -75,6 +99,30 @@ def _kelvin_to_elegant_temp(kelvin: int) -> int:
     return max(0, min(100, value))
 
 
+def _mode_names_for_language(language: str | None) -> dict[str, str]:
+    """Return localized mode display names for HA's current language."""
+    if (language or "en").lower().startswith("pl"):
+        return MODE_NAMES_PL
+    return MODE_NAMES_EN
+
+
+def _mode_name_to_key(name: str, language: str | None) -> str | None:
+    """Resolve a localized mode name back to its stable mode key."""
+    names = _mode_names_for_language(language)
+    for key, display in names.items():
+        if display == name:
+            return key
+
+    # Also accept the other language and the stable key for automations.
+    for name_map in (MODE_NAMES_EN, MODE_NAMES_PL):
+        for key, display in name_map.items():
+            if display == name:
+                return key
+    if name in MODE_NAMES_EN:
+        return name
+    return None
+
+
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     """Convert hex color string (#RRGGBB or 0xRRGGBB) to RGB tuple."""
     if hex_color.startswith("#"):
@@ -92,6 +140,85 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
 def _rgb_to_hex_0x(r: int, g: int, b: int) -> str:
     """Convert RGB tuple to 0xRRGGBB hex string (Elegant format for sending)."""
     return f"0x{r:02X}{g:02X}{b:02X}"
+
+
+def _is_empty_color(value: Any) -> bool:
+    """Return true for missing or black controller color values."""
+    if not value:
+        return True
+    color = str(value).upper().replace("0X", "").replace("#", "")
+    return color in ("", "000000")
+
+
+def _zone_color(zone: dict[str, Any], key: str, fallback: str) -> str:
+    """Return a color from zone state, falling back when it is empty/black."""
+    value = zone.get(key)
+    return fallback if _is_empty_color(value) else str(value)
+
+
+def _zone_hue_to_elegant(value: Any, fallback: int = 0) -> int:
+    """Convert a stored zone hue to the 0-255 scale used by set_zone."""
+    try:
+        hue = float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+    if hue > ELEGANT_HUE_MAX:
+        hue = hue * ELEGANT_HUE_MAX / 360
+    return max(0, min(ELEGANT_HUE_MAX - 1, int(hue)))
+
+
+def _mode_switch_payload(mode_key: str, zone: dict[str, Any]) -> dict[str, Any]:
+    """Build the protocol payload needed to switch light mode."""
+    if mode_key == MODE_KEY_COLOR:
+        try:
+            current_sat = int(zone.get("color_saturation", 0) or 0)
+        except (TypeError, ValueError):
+            current_sat = 0
+        return {
+            "color_mode": COLOR_MODE_SINGLE,
+            "color_saturation": current_sat if current_sat > 0 else 100,
+        }
+
+    if mode_key == MODE_KEY_WHITE:
+        return {
+            "color_mode": COLOR_MODE_SINGLE,
+            "color_saturation": 0,
+            "color_1": DEFAULT_COLOR,
+            "color_2": DEFAULT_COLOR,
+            "color_3": DEFAULT_COLOR,
+            "color_1_hue": 0,
+            "color_2_hue": 0,
+            "color_3_hue": 0,
+        }
+
+    if mode_key == MODE_KEY_DOUBLE:
+        return {
+            "color_mode": COLOR_MODE_DOUBLE,
+            "color_1": _zone_color(zone, "color_1", "0xFF0000"),
+            "color_1_hue": _zone_hue_to_elegant(zone.get("color_1_hue"), 0),
+            "color_2": _zone_color(zone, "color_2", "0x00FF00"),
+            "color_2_hue": _zone_hue_to_elegant(zone.get("color_2_hue"), 85),
+        }
+
+    if mode_key == MODE_KEY_TRIPLE:
+        return {
+            "color_mode": COLOR_MODE_TRIPLE,
+            "color_1": _zone_color(zone, "color_1", "0xFF0000"),
+            "color_1_hue": _zone_hue_to_elegant(zone.get("color_1_hue"), 0),
+            "color_2": _zone_color(zone, "color_2", "0x00FF00"),
+            "color_2_hue": _zone_hue_to_elegant(zone.get("color_2_hue"), 85),
+            "color_3": _zone_color(zone, "color_3", "0x0000FF"),
+            "color_3_hue": _zone_hue_to_elegant(zone.get("color_3_hue"), 170),
+        }
+
+    if mode_key == MODE_KEY_RAINBOW:
+        return {"color_mode": COLOR_MODE_RAINBOW}
+
+    if mode_key == MODE_KEY_AUTO_CHANGE:
+        return {"color_mode": COLOR_MODE_AUTO_CHANGE}
+
+    raise ValueError(f"Unknown mode key: {mode_key}")
 
 
 def _rgb_to_hs(r: int, g: int, b: int) -> tuple[float, float]:
@@ -144,13 +271,26 @@ def _hs_to_rgb(hue: float, saturation: float) -> tuple[int, int, int]:
     )
 
 
+# Scenes bitfield: one bit per effect ID. Minimum 4 uint32 words (128 IDs)
+# for backward compatibility with older controllers; extended up to
+# SCENES_MAX_WORDS for controllers that define effects with higher IDs
+# (e.g. type 80 has effects up to ID 182).
+SCENES_MIN_WORDS = 4
+SCENES_MAX_WORDS = 8      # supports effect IDs 0..255
+SCENES_MAX_ID = SCENES_MAX_WORDS * 32 - 1
+
+
 def _decode_scenes_to_effect_ids(scenes: list[int] | tuple[int, ...]) -> list[int]:
-    """Decode 4x uint32 bitfield into sorted list of enabled effect IDs (0..127)."""
+    """Decode a scenes bitfield into a sorted list of enabled effect IDs.
+
+    Scans ALL elements of the incoming array (up to SCENES_MAX_WORDS),
+    not only the first 4 — modern controllers may send extended arrays.
+    """
     if not isinstance(scenes, (list, tuple)):
         return []
 
     effect_ids: list[int] = []
-    for word_index, raw_word in enumerate(scenes[:4]):
+    for word_index, raw_word in enumerate(scenes[:SCENES_MAX_WORDS]):
         try:
             word = int(raw_word) & 0xFFFFFFFF
         except (TypeError, ValueError):
@@ -164,18 +304,32 @@ def _decode_scenes_to_effect_ids(scenes: list[int] | tuple[int, ...]) -> list[in
 
 
 def _encode_effect_id_to_scenes(effect_id: int) -> list[int]:
-    """Encode single effect_id (0..127) into 4x uint32 bitfield."""
-    if effect_id < 0 or effect_id > 127:
-        raise ValueError(f"effect_id out of range: {effect_id}")
+    """Encode a single effect_id into a scenes bitfield (4..8 uint32 words)."""
+    return _encode_effect_ids_to_scenes([effect_id])
 
-    scenes = [0, 0, 0, 0]
-    word_idx = effect_id // 32
-    bit_idx = effect_id % 32
-    scenes[word_idx] = 1 << bit_idx
+
+def _encode_effect_ids_to_scenes(effect_ids: list[int]) -> list[int]:
+    """Encode a list of effect_ids into a scenes bitfield.
+
+    Output array size is at least SCENES_MIN_WORDS, and grows up to
+    SCENES_MAX_WORDS to accommodate higher-ID effects. Keeping the
+    minimum preserves the on-wire shape for older controllers.
+    """
+    # Determine required size from the largest ID (default to minimum)
+    max_id = max(effect_ids) if effect_ids else 0
+    if max_id < 0 or max_id > SCENES_MAX_ID:
+        raise ValueError(f"effect_id out of range: {max_id}")
+    words_needed = max(SCENES_MIN_WORDS, max_id // 32 + 1)
+
+    scenes = [0] * words_needed
+    for effect_id in effect_ids:
+        if effect_id < 0 or effect_id > SCENES_MAX_ID:
+        raise ValueError(f"effect_id out of range: {effect_id}")
+        scenes[effect_id // 32] |= 1 << (effect_id % 32)
     return scenes
 
 
-class ElegantLight(CoordinatorEntity, LightEntity):
+class ElegantLight(CoordinatorEntity[ElegantCoordinator], LightEntity):
     """Representation of an Elegant LED zone as a light entity."""
 
     _attr_has_entity_name = True
@@ -190,14 +344,17 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         """Initialize the light entity."""
         super().__init__(coordinator)
         self._idx = idx
-        self._zone_type = zone_data.get("type", 0)
+        try:
+            self._zone_type = int(zone_data.get("type", 0))
+        except (TypeError, ValueError):
+            self._zone_type = 0
         self._attr_unique_id = f"{coordinator.mac}_{idx}"
         self._attr_name = zone_data.get("name", f"Elegant Room {idx + 1}")
 
         # Device info — all zones belong to one controller device
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.mac)},
-            name=f"Elegant-{coordinator.user_settings.get('sn', '')[-4:]}",
+            name=_controller_name(coordinator),
             manufacturer="Elegant",
             model="LED Controller",
             configuration_url=f"http://{coordinator.host}",
@@ -205,14 +362,17 @@ class ElegantLight(CoordinatorEntity, LightEntity):
 
         # Set supported color modes based on zone type
         if self._zone_type > 0:
-            # Physical zone: supports HS color and color temp
-            self._attr_supported_color_modes = {
-                ColorMode.HS,
-                ColorMode.COLOR_TEMP,
-            }
+            available_modes = set(zone_data.get("available_modes") or [])
+            supported_color_modes: set[ColorMode] = set()
+            if MODE_KEY_COLOR in available_modes:
+                supported_color_modes.add(ColorMode.HS)
+            if MODE_KEY_WHITE in available_modes:
+                supported_color_modes.add(ColorMode.COLOR_TEMP)
             self._attr_min_color_temp_kelvin = MIN_COLOR_TEMP_KELVIN
             self._attr_max_color_temp_kelvin = MAX_COLOR_TEMP_KELVIN
-            self._attr_entity_registry_enabled_default = True
+            if not supported_color_modes:
+                supported_color_modes.add(ColorMode.BRIGHTNESS)
+            self._attr_supported_color_modes = supported_color_modes
         else:
             # Virtual zone (type 0): on/off only — serves as trigger for automations
             # Disabled by default, user can enable manually in HA UI
@@ -248,13 +408,30 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         if self._zone_type == 0:
             return ColorMode.ONOFF
 
-        elegant_mode = self._zone.get("color_mode", 0)
-        saturation = self._zone.get("color_saturation", 0)
+        try:
+            elegant_mode = int(self._zone.get("color_mode", 0))
+        except (TypeError, ValueError):
+            elegant_mode = 0
+        try:
+            saturation = int(self._zone.get("color_saturation", 0) or 0)
+        except (TypeError, ValueError):
+            saturation = 0
+        supported = self.supported_color_modes or set()
 
         # If saturation is 0, it's white/color temp mode
-        if saturation == 0 and elegant_mode == 0:
+        if (
+            saturation == 0
+            and elegant_mode == COLOR_MODE_SINGLE
+            and ColorMode.COLOR_TEMP in supported
+        ):
             return ColorMode.COLOR_TEMP
+        if ColorMode.HS in supported:
         return ColorMode.HS
+        if ColorMode.COLOR_TEMP in supported:
+            return ColorMode.COLOR_TEMP
+        if ColorMode.BRIGHTNESS in supported:
+            return ColorMode.BRIGHTNESS
+        return ColorMode.ONOFF
 
     @property
     def hs_color(self) -> tuple[float, float] | None:
@@ -292,7 +469,92 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         }
         # Include raw elegant color_mode for debugging/automations
         attrs["elegant_color_mode"] = self._zone.get("color_mode", 0)
+
+        effects_map: dict[int, str] = self._zone.get("available_effects", {})
+        roll_map: dict[int, str] = self._zone.get("available_roll_effects", {})
+        mode_names = self._mode_names()
+        mode_key = self._zone_mode_key()
+
+        # --- Regular (bitfield) effects — consumed by custom card ----------
+        # Effect ID → name mapping for THIS zone (per controller type).
+        # Keys become strings after JSON serialization — card handles both.
+        attrs["effect_names"] = {
+            str(k): v for k, v in effects_map.items()
+        }
+
+        # Active effect IDs (real IDs == bit positions in scenes)
+        scenes = self._zone.get("scenes")
+        if scenes:
+            active_ids = _decode_scenes_to_effect_ids(scenes)
+        else:
+            active_ids = []
+        attrs["active_effect_ids"] = active_ids
+
+        # Back-compat: list of active effect NAMES (used by old card and
+        # generic HA integrations). Falls back to "Effect <id>" when the
+        # name is missing for a given ID in this zone's dictionary.
+        active_names: list[str] = []
+        for eid in sorted(active_ids):
+            name = effects_map.get(eid) or effects_map.get(str(eid))
+            active_names.append(name if name else f"Effect {eid}")
+        attrs["active_effects"] = active_names
+
+        # --- Active light mode ---------------------------------------------
+        attrs[ATTR_ACTIVE_MODE_ID] = self._zone.get("color_mode", 0)
+        attrs[ATTR_ACTIVE_MODE] = mode_names.get(mode_key) if mode_key else None
+        attrs[ATTR_AVAILABLE_MODES] = [
+            mode_names[key]
+            for key in self._zone.get("available_modes", [])
+            if key in mode_names
+        ]
+        attrs[ATTR_EFFECT_FLAGS] = {
+            str(k): v for k, v in self._zone.get("effect_flags", {}).items()
+        }
+
+        if roll_map:
+            attrs["roll_effect_names"] = {
+                str(k): v for k, v in roll_map.items()
+            }
+            roll_id = self._zone.get("roll_effect")
+            try:
+                roll_id_int = int(roll_id)
+            except (TypeError, ValueError):
+                roll_id_int = None
+            attrs["active_roll_effect_id"] = roll_id_int
+            if roll_id_int is None:
+                attrs["active_roll_effect"] = None
+            else:
+                attrs["active_roll_effect"] = (
+                    roll_map.get(roll_id_int)
+                    or roll_map.get(str(roll_id_int))
+                )
+
         return attrs
+
+    def _mode_names(self) -> dict[str, str]:
+        """Return localized mode names for this entity."""
+        hass = self.hass or self.coordinator.hass
+        return _mode_names_for_language(hass.config.language)
+
+    def _zone_mode_key(self) -> str | None:
+        """Return the current stable light mode key for this zone."""
+        try:
+            mode = int(self._zone.get("color_mode", COLOR_MODE_SINGLE))
+        except (TypeError, ValueError):
+            mode = COLOR_MODE_SINGLE
+        try:
+            saturation = int(self._zone.get("color_saturation", 0) or 0)
+        except (TypeError, ValueError):
+            saturation = 0
+
+        if mode == COLOR_MODE_SINGLE:
+            return MODE_KEY_WHITE if saturation == 0 else MODE_KEY_COLOR
+        return {
+            COLOR_MODE_DOUBLE: MODE_KEY_DOUBLE,
+            COLOR_MODE_RAINBOW: MODE_KEY_RAINBOW,
+            COLOR_MODE_TRIPLE: MODE_KEY_TRIPLE,
+            COLOR_MODE_AUTO_CHANGE: MODE_KEY_AUTO_CHANGE,
+        }.get(mode)
 
     @property
     def supported_features(self) -> LightEntityFeature:
@@ -301,8 +563,7 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         if self._zone_type != 0:
             features |= LightEntityFeature.TRANSITION
 
-            effects = self._zone.get("available_effects", {})
-            if effects:
+            if self._zone.get("available_effects"):
                 features |= LightEntityFeature.EFFECT
 
         _LOGGER.debug("Supported features for zone_id=%d: %s", self._idx, features)
@@ -311,14 +572,12 @@ class ElegantLight(CoordinatorEntity, LightEntity):
 
     @property
     def effect_list(self) -> list[str]:
-        effects: dict[int, str] = self._zone.get("available_effects", {})
-        _LOGGER.debug("Effect list for zone_id=%d: %s", self._idx, effects)
-        
-        return list(effects.values())
+        effects_map: dict[int, str] = self._zone.get("available_effects", {})
+        return list(effects_map.values())
 
     @property
     def effect(self) -> str | None:
-        effects: dict[int, str] = self._zone.get("available_effects", {})
+        effects_map: dict[int, str] = self._zone.get("available_effects", {})
         scenes = self._zone.get("scenes")
         if not scenes:
             return None
@@ -327,9 +586,13 @@ class ElegantLight(CoordinatorEntity, LightEntity):
         if not enabled_effect_ids:
             return None
 
-        effect_id = min(enabled_effect_ids)
+        names = []
+        for eid in sorted(enabled_effect_ids):
+            name = effects_map.get(eid) or effects_map.get(str(eid))
+            if name:
+                names.append(name)
 
-        return effects.get(effect_id) or effects.get(str(effect_id))
+        return ", ".join(names) if names else None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on with optional parameters."""
@@ -340,17 +603,21 @@ class ElegantLight(CoordinatorEntity, LightEntity):
 
             effects_map = self._zone.get("available_effects", {})
             effect_id = next(
-                (int(eid) for eid, name in effects_map.items() if name == selected_name),
+                (
+                    int(eid)
+                    for eid, name in effects_map.items()
+                    if name == selected_name
+                ),
                 None,
             )
 
             if effect_id is None:
-                _LOGGER.warning("Effect not found: %s", selected_name)
+                _LOGGER.warning(
+                    "Effect not found in zone %d: %s",
+                    self._idx, selected_name,
+                )
             else:
-                scenes = _encode_effect_id_to_scenes(effect_id)
-                #_LOGGER.debug("Setting effect '%s' (id %d) for zone %d: scenes=%s", selected_name, effect_id, self._idx, scenes)
-                params["scenes"] = scenes  
-
+                params["scenes"] = _encode_effect_id_to_scenes(effect_id)
 
         if ATTR_BRIGHTNESS in kwargs:
             # HA 0-255 -> Elegant 0-100
@@ -364,8 +631,8 @@ class ElegantLight(CoordinatorEntity, LightEntity):
             elegant_hue = int(hue * ELEGANT_HUE_MAX / 360)
             params["color_1"] = _rgb_to_hex_0x(r, g, b)
             params["color_1_hue"] = elegant_hue
-            params["color_saturation"] = int(saturation)
-            params["color_mode"] = 0  # Static color mode
+            params["color_saturation"] = max(1, int(saturation))
+            params["color_mode"] = COLOR_MODE_SINGLE
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
             kelvin = kwargs[ATTR_COLOR_TEMP_KELVIN]
@@ -373,15 +640,18 @@ class ElegantLight(CoordinatorEntity, LightEntity):
             params["white_temperature"] = elegant_temp
             # Switch to white mode: color_mode 0 with saturation 0
             params["color_saturation"] = 0
-            params["color_mode"] = 0
+            params["color_mode"] = COLOR_MODE_SINGLE
             params["color_1"] = DEFAULT_COLOR
             params["color_1_hue"] = 0
+            params["color_2"] = DEFAULT_COLOR
+            params["color_2_hue"] = 0
+            params["color_3"] = DEFAULT_COLOR
+            params["color_3_hue"] = 0
 
         # Always ensure the light is turned on
         params["is_on"] = True
 
         await self.coordinator.async_set_zone(self._idx, **params)
-        # await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the light off."""
@@ -402,6 +672,32 @@ class ElegantLight(CoordinatorEntity, LightEntity):
             color_saturation=DEFAULT_COLOR_SATURATION,
             bright=DEFAULT_BRIGHTNESS,
         )
+
+    async def async_set_effects(self, effect_names: list[str]) -> None:
+        """Set multiple effects on this zone by their names."""
+        effects_map: dict[int, str] = self._zone.get("available_effects", {})
+
+        effect_ids: list[int] = []
+        for name in effect_names:
+            eid = next(
+                (int(k) for k, v in effects_map.items() if v == name),
+                None,
+            )
+            if eid is None:
+                _LOGGER.warning("Effect not found: %s (zone %d)", name, self._idx)
+            else:
+                effect_ids.append(eid)
+
+        if not effect_ids:
+            _LOGGER.warning("No valid effects to set for zone %d", self._idx)
+            return
+
+        scenes = _encode_effect_ids_to_scenes(effect_ids)
+        _LOGGER.debug(
+            "Setting %d effects for zone %d: %s -> scenes=%s",
+            len(effect_ids), self._idx, effect_names, scenes,
+        )
+        await self.coordinator.async_set_zone(self._idx, scenes=scenes)
 
     @callback
     def _handle_coordinator_update(self) -> None:

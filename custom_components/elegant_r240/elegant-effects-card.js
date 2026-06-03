@@ -15,7 +15,15 @@
  *   columns: 3
  */
 
-const CARD_VERSION = '1.4.0';
+const CARD_VERSION = '1.6.2';
+
+const BLOCK_FLAG_BY_MODE = {
+  0: 'single_not',
+  1: 'double_not',
+  2: 'multi_not',
+  3: 'triple_not',
+  4: 'multi_not',
+};
 
 class ElegantEffectsCard extends HTMLElement {
 
@@ -74,14 +82,19 @@ class ElegantEffectsCard extends HTMLElement {
     let effectCount = 0;
     for (const e of entities) {
       const s = this._hass.states[e];
-      if (s?.attributes?.effect_list?.length) {
-        effectCount = s.attributes.effect_list.length;
+      const names = s?.attributes?.effect_names || {};
+      const count = Object.keys(names).length;
+      if (count) {
+        effectCount = count;
         break;
       }
     }
     const cols = this._config.columns || 2;
     const zonesRows = entities.length > 1 ? 1 : 0;
-    return Math.ceil(effectCount / cols) + zonesRows + 2;
+    const rollRows = entities.some(e =>
+      Object.keys(this._hass.states[e]?.attributes?.roll_effect_names || {}).length > 0
+    ) ? 2 : 0;
+    return Math.ceil(effectCount / cols) + zonesRows + rollRows + 2;
   }
 
   static getStubConfig() {
@@ -91,6 +104,21 @@ class ElegantEffectsCard extends HTMLElement {
   /* ---- Rendering ---- */
 
   _render() {
+    try {
+      this._renderInner();
+    } catch (err) {
+      console.error('[elegant-effects-card] render failed:', err);
+      this.shadowRoot.innerHTML = `
+        <ha-card>
+          <div style="padding:16px;color:var(--error-color,#db4437)">
+            Elegant Effects Card render failed:
+            <code>${this._esc(err?.message || err)}</code>
+          </div>
+        </ha-card>`;
+    }
+  }
+
+  _renderInner() {
     if (!this._hass || !this._config._entities) return;
 
     const entities = this._config._entities;
@@ -156,6 +184,22 @@ class ElegantEffectsCard extends HTMLElement {
       const arr = this._hass.states[ent]?.attributes?.active_effect_ids || [];
       return new Set(arr.map(v => Number(v)));
     };
+    const isAllowedForZone = (ent, effectId) => {
+      const st = this._hass.states[ent];
+      const mode = Number(st?.attributes?.active_mode_id ?? 0);
+      const block = BLOCK_FLAG_BY_MODE[mode];
+      if (!block) return true;
+      const flags = st?.attributes?.effect_flags?.[String(effectId)] || [];
+      return !flags.includes(block);
+    };
+    const getRollNames = (ent) => {
+      return this._hass.states[ent]?.attributes?.roll_effect_names || {};
+    };
+    const getActiveRollId = (ent) => {
+      const raw = this._hass.states[ent]?.attributes?.active_roll_effect_id;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
+    };
 
     // Pick reference zone = the one with the most entries in effect_names
     let refEntity = null;
@@ -188,6 +232,19 @@ class ElegantEffectsCard extends HTMLElement {
         : n === selectedEntities.length ? 'all'
         : 'some');
     }
+    const modeState = new Map();
+    for (const eff of effectList) {
+      let allowed = 0;
+      for (const e of selectedEntities) {
+        if (isAllowedForZone(e, eff.id)) allowed++;
+      }
+      modeState.set(eff.id,
+        selectedEntities.length === 0 || allowed === selectedEntities.length
+          ? 'allowed'
+          : allowed === 0
+            ? 'disabled-mode'
+            : 'partial-mode');
+    }
     const activeCount = [...activeState.values()].filter(v => v !== 'none').length;
 
     /* Zone chips (only in multi-zone mode) */
@@ -216,6 +273,39 @@ class ElegantEffectsCard extends HTMLElement {
         </div>`;
     }
 
+    /* Roll effect block */
+    let rollHtml = '';
+    const rollEntities = selectedEntities.filter(e =>
+      Object.keys(getRollNames(e)).length > 0
+    );
+    if (rollEntities.length > 0) {
+      const rows = rollEntities.map(e => {
+        const s = this._hass.states[e];
+        const zoneName = s.attributes.friendly_name || e;
+        const rollMap = getRollNames(e);
+        const activeRollId = getActiveRollId(e);
+        const options = Object.entries(rollMap)
+          .map(([id, name]) => ({ id: Number(id), name: String(name) }))
+          .filter(item => Number.isFinite(item.id))
+          .sort((a, b) => a.id - b.id)
+          .map(item => `
+            <option value="${item.id}"${item.id === activeRollId ? ' selected' : ''}>
+              ${this._esc(item.name)}
+            </option>`)
+          .join('');
+        return `
+          <label class="roll-row${multi ? '' : ' single'}">
+            ${multi ? `<span class="roll-label">${this._esc(zoneName)}</span>` : ''}
+            <select class="roll-select" data-entity="${this._esc(e)}">
+              ${options}
+            </select>
+          </label>`;
+      }).join('');
+      rollHtml = `
+        <div class="section-label">Roll effect</div>
+        <div class="roll-panel">${rows}</div>`;
+    }
+
     /* Effects block */
     let effectsHtml = '';
     if (effectList.length === 0) {
@@ -227,12 +317,21 @@ class ElegantEffectsCard extends HTMLElement {
       let chips = '';
       for (const eff of effectList) {
         const state = activeState.get(eff.id);
-        const cls   = state === 'all' ? 'active' : (state === 'some' ? 'partial' : '');
+        const modeCls = modeState.get(eff.id) || 'allowed';
+        const cls = [
+          state === 'all' ? 'active' : (state === 'some' ? 'partial' : ''),
+          modeCls === 'allowed' ? '' : modeCls,
+        ].filter(Boolean).join(' ');
         const check = state === 'all' ? '✓' : (state === 'some' ? '–' : '');
+        const title = modeCls === 'disabled-mode'
+          ? `ID ${eff.id} - not available in the current mode`
+          : modeCls === 'partial-mode'
+            ? `ID ${eff.id} - available for only some selected zones`
+            : `ID ${eff.id}`;
         chips += `
           <button type="button" class="chip ${cls}"
                   data-effect-id="${eff.id}"
-                  title="ID ${eff.id}">
+                  title="${this._esc(title)}">
             <span class="check">${check}</span>
             <span class="label">${this._esc(eff.name)}</span>
           </button>`;
@@ -256,6 +355,7 @@ class ElegantEffectsCard extends HTMLElement {
           </span>
         </div>
         ${zonesHtml}
+        ${rollHtml}
         ${effectsHtml}
       </ha-card>`;
 
@@ -273,6 +373,11 @@ class ElegantEffectsCard extends HTMLElement {
         this._selectedZones = new Set();
         this._render();
       });
+    this.shadowRoot.querySelectorAll('.roll-select').forEach(select =>
+      select.addEventListener('change', () =>
+        this._callRollService(select.dataset.entity, Number(select.value))
+      )
+    );
 
     const allIds = effectList.map(e => e.id);
     this.shadowRoot.querySelectorAll('.chip').forEach(chip =>
@@ -345,6 +450,19 @@ class ElegantEffectsCard extends HTMLElement {
     this._hass.callService('elegant', 'set_zone_effects', {
       zone_index: zoneIndex,
       effect_ids: effectIds.map(v => Number(v)).filter(Number.isFinite),
+    });
+  }
+
+  _callRollService(entityId, rollEffectId) {
+    const stateObj = this._hass.states[entityId];
+    const zoneIndex = stateObj?.attributes?.zone_index;
+    if (zoneIndex === undefined || zoneIndex === null || !Number.isFinite(rollEffectId)) {
+      console.error('[elegant-effects-card] cannot set roll effect for', entityId);
+      return;
+    }
+    this._hass.callService('elegant', 'set_zone_roll_effect', {
+      zone_index: zoneIndex,
+      roll_effect_id: rollEffectId,
     });
   }
 
@@ -460,6 +578,41 @@ class ElegantEffectsCard extends HTMLElement {
         color: var(--chip-active-bg);
       }
 
+      /* ---- roll effect ---- */
+      .roll-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 6px 16px 4px;
+      }
+      .roll-row {
+        display: grid;
+        grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr);
+        align-items: center;
+        gap: 8px;
+      }
+      .roll-row.single {
+        grid-template-columns: 1fr;
+      }
+      .roll-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--secondary-text-color);
+        font-size: 0.82rem;
+      }
+      .roll-select {
+        min-width: 0;
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid var(--chip-border);
+        border-radius: 6px;
+        background: var(--card-background-color, #fff);
+        color: var(--primary-text-color);
+        font: inherit;
+        padding: 7px 8px;
+      }
+
       /* ---- effect grid ---- */
       .grid {
         display: grid;
@@ -508,6 +661,15 @@ class ElegantEffectsCard extends HTMLElement {
         background: var(--chip-active-bg);
         border-color: var(--chip-active-bg);
         color: var(--chip-active-text);
+      }
+      .chip.partial-mode {
+        box-shadow: inset 0 0 0 1px var(--warning-color, #f4b400);
+      }
+      .chip.disabled-mode {
+        opacity: 0.35;
+      }
+      .chip.disabled-mode:hover {
+        opacity: 0.55;
       }
 
       .chip .check {
@@ -901,8 +1063,25 @@ class ElegantEffectsCardEditor extends HTMLElement {
 
 function _safeDefine(tagName, klass) {
   try {
-    if (customElements.get(tagName)) {
-      console.info(`[elegant-effects-card] ${tagName} already registered`);
+    const existing = customElements.get(tagName);
+    if (existing) {
+      for (const name of Object.getOwnPropertyNames(klass.prototype)) {
+        if (name === 'constructor') continue;
+        Object.defineProperty(
+          existing.prototype,
+          name,
+          Object.getOwnPropertyDescriptor(klass.prototype, name),
+        );
+      }
+      for (const name of Object.getOwnPropertyNames(klass)) {
+        if (['length', 'name', 'prototype'].includes(name)) continue;
+        Object.defineProperty(
+          existing,
+          name,
+          Object.getOwnPropertyDescriptor(klass, name),
+        );
+      }
+      console.info(`[elegant-effects-card] ${tagName} already registered; patched to v${CARD_VERSION}`);
       return;
     }
     customElements.define(tagName, klass);

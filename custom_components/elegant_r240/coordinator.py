@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Any, Callable
@@ -25,7 +26,10 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
     DOMAIN,
+    EFFECT_FLAG_KEYS,
     MAX_ZONES,
+    MODE_BLOCKING_FLAG,
+    MODE_KEYS,
     PING_INTERVAL,
     RECONNECT_BASE_DELAY,
     RECONNECT_MAX_DELAY,
@@ -36,6 +40,91 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Helpers to parse JavaScript object literals served by the controller
+# (lang_account.js). Needed because that file uses unquoted keys and is not
+# valid JSON.
+# ---------------------------------------------------------------------------
+
+def _extract_balanced_braces(text: str, start: int) -> str | None:
+    """Return the text starting at text[start] ('{' char) through the
+    matching '}'. Respects string literals (single and double quoted).
+    """
+    if start >= len(text) or text[start] != "{":
+        return None
+    depth = 0
+    i = start
+    in_str = False
+    str_char = ""
+    while i < len(text):
+        c = text[i]
+        if in_str:
+            if c == "\\" and i + 1 < len(text):
+                i += 2
+                continue
+            if c == str_char:
+                in_str = False
+        else:
+            if c == '"' or c == "'":
+                in_str = True
+                str_char = c
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        i += 1
+    return None
+
+
+def _js_object_to_dict(js_text: str) -> dict | None:
+    """Convert a JS object literal to a Python dict via json.loads.
+
+    Handles:
+      - unquoted identifier/numeric keys:   foo:   / 123:
+      - trailing commas before } or ]
+    Does NOT handle single-quoted strings inside values (would need a full
+    tokenizer). All string values in lang_account.js use double quotes.
+    """
+    if not js_text:
+        return None
+
+    # Quote unquoted keys. The regex looks for { or , followed by an
+    # identifier or number directly before a colon. It won't match inside
+    # double-quoted strings because string content is never preceded by
+    # a bare "{" or "," at the JSON-structure level.
+    step1 = re.sub(
+        r'([{,])(\s*)([A-Za-z_][A-Za-z_0-9]*|\d+)(\s*):',
+        r'\1\2"\3"\4:',
+        js_text,
+    )
+    # Strip trailing commas.
+    step2 = re.sub(r",(\s*[}\]])", r"\1", step1)
+
+    try:
+        return json.loads(step2)
+    except json.JSONDecodeError as err:
+        _LOGGER.debug("Failed to parse JS object literal: %s", err)
+        return None
+
+
+def _extract_js_named_object(text: str, js_path: str) -> dict | None:
+    """Find an assignment like `<js_path> = { ... };` in `text` and return
+    the object parsed as a Python dict.
+    """
+    # Escape dots in the path for regex and allow whitespace around separators.
+    parts = [re.escape(p) for p in js_path.split(".")]
+    pattern = r"\s*\.\s*".join(parts) + r"\s*=\s*\{"
+    m = re.search(pattern, text)
+    if not m:
+        return None
+    obj_text = _extract_balanced_braces(text, m.end() - 1)
+    if not obj_text:
+        return None
+    return _js_object_to_dict(obj_text)
 
 
 class ElegantApiClient:
@@ -55,6 +144,9 @@ class ElegantApiClient:
         self._zone_lock = asyncio.Lock()  # Serialize set_selected_zones + set_zone
         self._last_message_time: float = 0.0
         self._controllers_cache: dict[str, Any] | list[Any] | None = None
+        # Parsed content of /lang_account.js:  { "EN": {...}, "PL": {...} }
+        # Each inner dict contains: effects / effects_roll / controllers_desc
+        self._lang_account_cache: dict[str, dict[str, Any]] | None = None
 
     @property
     def connected(self) -> bool:
@@ -361,7 +453,7 @@ class ElegantApiClient:
             try:
                 data = await resp.json()
             except (aiohttp.ContentTypeError, json.JSONDecodeError):
-                # Fallback gdy serwer zwraca text/plain
+                # Fallback
                 text = await resp.text()
                 data = json.loads(text)
 
@@ -369,39 +461,304 @@ class ElegantApiClient:
       
         return data
 
-    def _pick_effect_name(self, effect: dict[str, Any]) -> str:
-        """Return localized effect name based on HA language."""
-        lang = (self._hass.config.language or "en").lower()  # np. "pl", "en"
-        # _LOGGER.debug("Picking effect name for lang=%s: %s", lang, effect)
+    async def async_get_lang_account(
+        self, *, force_refresh: bool = False
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch and parse /lang_account.js. Cached per controller.
+
+        The file contains two JS object literals assigned to
+        `libs_language.EN` and `libs_language.PL`. Each holds `effects`,
+        `effects_roll` and `controllers_desc` maps indexed by controller
+        type id. We extract them and cache for name lookups.
+        """
+        if self._lang_account_cache is not None and not force_refresh:
+            return self._lang_account_cache
+
+        session = async_get_clientsession(self._hass)
+        url = f"http://{self._host}/lang_account.js"
+
+        try:
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                resp.raise_for_status()
+                # Controller may serve non-UTF-8; try UTF-8 first, fallback
+                # to cp1250/iso-8859-2 if that fails (Polish chars).
+                try:
+                    text = await resp.text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    raw = await resp.read()
+                    for enc in ("cp1250", "iso-8859-2", "latin-1"):
+                        try:
+                            text = raw.decode(enc)
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    else:
+                        text = raw.decode("utf-8", errors="replace")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            _LOGGER.debug("Failed to fetch lang_account.js: %s", err)
+            self._lang_account_cache = {}
+            return self._lang_account_cache
+
+        result: dict[str, dict[str, Any]] = {}
+        for lang_code in ("EN", "PL"):
+            parsed = _extract_js_named_object(text, f"libs_language.{lang_code}")
+            if isinstance(parsed, dict):
+                result[lang_code] = parsed
+
+        _LOGGER.debug(
+            "lang_account.js parsed: langs=%s, effects types (EN)=%s, (PL)=%s",
+            list(result.keys()),
+            sorted(
+                (k for k in (result.get("EN", {}).get("effects", {}) or {}).keys()),
+                key=lambda k: (isinstance(k, str), str(k)),
+            ),
+            sorted(
+                (k for k in (result.get("PL", {}).get("effects", {}) or {}).keys()),
+                key=lambda k: (isinstance(k, str), str(k)),
+            ),
+        )
+
+        self._lang_account_cache = result
+        return result
+
+    # ------------------------------------------------------------------
+    # Name resolution
+    # ------------------------------------------------------------------
+
+    def _pick_effect_name_inline(self, effect: dict[str, Any]) -> str | None:
+        """Return a localized effect name from the controllers.json entry,
+        or None if the entry has neither name_pl nor name_en.
+        """
+        lang = (self._hass.config.language or "en").lower()
         preferred = "name_pl" if lang.startswith("pl") else "name_en"
         return (
             effect.get(preferred)
             or effect.get("name_en")
             or effect.get("name_pl")
-            or f"Effect {effect.get('id', '?')}"
         )
 
-    async def async_get_zone_effects(self, zone) -> list[str]:
-        """Return available effects for a zone from controllers.json."""
-        controllers = await self.async_get_controllers()
-        data = zone.get("type", 0)
-        if not (data > 0):
-           data = 50
-        
-        effects = controllers.get(str(data),{'effects': []})
-        effects = effects.get("effects", []) if isinstance(effects, dict) else []
-        
-        # _LOGGER.debug("effects zone=%s type=%s value=%r", zone, type(effects).__name__, effects)
+    def _pick_effect_name_from_lang(
+        self, type_id: int, effect_id: int, *, key: str = "effects"
+    ) -> str | None:
+        """Look up an effect name in the cached lang_account.js data for
+        the given controller type and effect id. Tries HA's current
+        language first, then the other language.
+        """
+        if not self._lang_account_cache:
+            return None
 
+        lang = (self._hass.config.language or "en").lower()
+        primary = "PL" if lang.startswith("pl") else "EN"
+        fallback = "EN" if primary == "PL" else "PL"
+
+        for lang_key in (primary, fallback):
+            block = self._lang_account_cache.get(lang_key, {})
+            effects_root = block.get(key, {}) if isinstance(block, dict) else {}
+            if not isinstance(effects_root, dict):
+                continue
+            # Keys may be int (from parsed JSON numeric keys) or str
+            type_block = effects_root.get(type_id) or effects_root.get(str(type_id))
+            if not isinstance(type_block, dict):
+                continue
+            name = type_block.get(effect_id) or type_block.get(str(effect_id))
+            if name:
+                return str(name)
+        return None
+
+    def _pick_effect_name(self, effect: dict[str, Any]) -> str:
+        """Legacy one-argument helper — retained for backward compatibility.
+
+        Prefers controllers.json inline name, otherwise falls back to a
+        generic ``Effect <id>`` label. Callers that know the controller
+        type should use :meth:`_resolve_effect_name` instead, which also
+        consults lang_account.js.
+        """
+        inline = self._pick_effect_name_inline(effect)
+        if inline:
+            return inline
+        return f"Effect {effect.get('id', '?')}"
+
+    def _resolve_effect_name(
+        self,
+        effect: dict[str, Any],
+        *,
+        type_id: int,
+        key: str = "effects",
+    ) -> str:
+        """Resolve the best available effect name for a given controller
+        type, trying sources in order:
+          1. controllers.json inline (name_pl / name_en in the entry)
+          2. lang_account.js[lang][key][type_id][effect_id]
+          3. ``Effect <id>`` fallback
+        """
+        inline = self._pick_effect_name_inline(effect)
+        if inline:
+            return inline
+        try:
+            eid = int(effect.get("id", -1))
+        except (TypeError, ValueError):
+            eid = -1
+        if eid >= 0:
+            from_lang = self._pick_effect_name_from_lang(type_id, eid, key=key)
+            if from_lang:
+                return from_lang
+        return f"Effect {eid}" if eid >= 0 else "Effect ?"
+
+    @staticmethod
+    def _flag_enabled(value: Any) -> bool:
+        """Return true when a flag value from controllers.json is enabled."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            return value.strip().lower() not in (
+                "",
+                "0",
+                "false",
+                "no",
+                "off",
+                "none",
+            )
+        return value is not None
+
+    @staticmethod
+    def resolve_zone_available_modes(
+        zone: dict[str, Any],
+        effect_flags: dict[int, list[str]],
+    ) -> list[str]:
+        """Derive available light modes from effect blocking flags."""
+        try:
+            zone_type = int(zone.get("type", 0))
+        except (TypeError, ValueError):
+            zone_type = 0
+
+        if zone_type <= 0:
+            return []
+
+        if not effect_flags:
+            return list(MODE_KEYS)
+
+        modes: list[str] = []
+        for mode_key in MODE_KEYS:
+            block_flag = MODE_BLOCKING_FLAG[mode_key]
+            if any(block_flag not in flags for flags in effect_flags.values()):
+                modes.append(mode_key)
+        return modes
+
+    async def async_get_zone_effects(self, zone) -> dict[int, str]:
+        """Return regular (bitfield) effects for a zone: {id: name}."""
+        return await self._fetch_zone_effect_map(zone, key="effects")
+
+    async def async_get_zone_effect_flags(self, zone) -> dict[int, list[str]]:
+        """Return regular effect flags for a zone: {id: [flag, ...]}."""
+        controllers = await self.async_get_controllers()
+        
+        type_id = zone.get("type", 0)
+        try:
+            type_id_int = int(type_id)
+        except (TypeError, ValueError):
+            type_id_int = 0
+        effective_type = type_id_int if type_id_int > 0 else 50
+        type_cfg = (
+            controllers.get(str(effective_type), {})
+            if isinstance(controllers, dict)
+            else {}
+        )
+        raw = type_cfg.get("effects", []) if isinstance(type_cfg, dict) else []
+
+        result: dict[int, list[str]] = {}
+        for effect in raw:
+            if not isinstance(effect, dict) or "id" not in effect:
+                continue
+            try:
+                eid = int(effect["id"])
+            except (TypeError, ValueError):
+                continue
+
+            result[eid] = [
+                flag for flag in EFFECT_FLAG_KEYS
+                if self._flag_enabled(effect.get(flag))
+            ]
+
+        return result
+
+    async def async_get_zone_roll_effects(self, zone) -> dict[int, str]:
+        """Return roll effects (single-choice, real IDs) for a zone: {id: name}.
+
+        Roll effects are applied once when the controller turns on. Unlike
+        regular effects, the controller stores a single integer in
+        `roll_effect` — there is no bitfield. Not every controller type
+        has roll effects.
+        """
+        return await self._fetch_zone_effect_map(zone, key="effects_roll")
+
+    async def _fetch_zone_effect_map(self, zone, *, key: str) -> dict[int, str]:
+        """Fetch and localize an effect list from controllers.json by key.
+        
+        Args:
+            key: "effects" (regular, bitfield) or "effects_roll" (rollout).
+        """
+        controllers = await self.async_get_controllers()
+        # Make sure lang_account.js is cached so _resolve_effect_name can
+        # fall back to it when controllers.json lacks inline names.
+        await self.async_get_lang_account()
+
+        type_id = zone.get("type", 0)
+        try:
+            type_id_int = int(type_id)
+        except (TypeError, ValueError):
+            type_id_int = 0
+        effective_type = type_id_int if type_id_int > 0 else 50
+        type_cfg = (
+            controllers.get(str(effective_type), {})
+            if isinstance(controllers, dict)
+            else {}
+        )
+        raw = type_cfg.get(key, []) if isinstance(type_cfg, dict) else []
+
+        # Key by real effect ID — for "effects" == bit position, for
+        # "effects_roll" == the integer value written to zone.roll_effect.
         result: dict[int, str] = {}
-        i = 0
-        for e in effects:
+        with_inline = 0
+        with_lang = 0
+        with_fallback = 0
+        for e in raw:
             if not isinstance(e, dict) or "id" not in e:
                 continue
-            # TODO: check if effect id is needed for anything
-            # result[int(e["id"])] = self._pick_effect_name(e)
-            result[i] = self._pick_effect_name(e)
-            i += 1
+            try:
+                eid = int(e["id"])
+            except (TypeError, ValueError):
+                continue
+
+            inline = self._pick_effect_name_inline(e)
+            if inline:
+                result[eid] = inline
+                with_inline += 1
+                continue
+            from_lang = self._pick_effect_name_from_lang(
+                effective_type, eid, key=key
+            )
+            if from_lang:
+                result[eid] = from_lang
+                with_lang += 1
+                continue
+            result[eid] = f"Effect {eid}"
+            with_fallback += 1
+
+        _LOGGER.debug(
+            "Zone effects fetched: type=%s (effective=%s) key=%s → "
+            "%d entries (inline=%d, lang_account=%d, fallback=%d). "
+            "Available controller types in controllers.json: %s",
+            type_id, effective_type, key,
+            len(result), with_inline, with_lang, with_fallback,
+            sorted(
+                [k for k in controllers.keys() if isinstance(k, str) and k.isdigit()],
+                key=int,
+            ) if isinstance(controllers, dict) else "(not a dict)",
+        )
         return result
 
 
@@ -557,23 +914,44 @@ class ElegantCoordinator(DataUpdateCoordinator):
                     "time_scene": 15,
                     "roll_effect": 1,
                     "scenes": [2, 0, 0, 0],
-                    "available_effects": [],  # Dodaj tutaj
+                    "available_effects": {},
+                    "available_roll_effects": {},
+                    "effect_flags": {},
+                    "available_modes": [],
                 }
             )
 
-        # Pobierz listę efektów dla każdej strefy
+        # Get lists of effects for each zone (regular + roll)
         for idx, zone in enumerate(self._zones):
             try:
                 effects = await self.api.async_get_zone_effects(zone)
                 zone["available_effects"] = effects
-                # _LOGGER.debug("Zone %d effects: %s", idx, effects)
             except Exception as err:
                 _LOGGER.warning("Failed to fetch effects for zone %d: %s", idx, err)
-                zone["available_effects"] = []
+                zone["available_effects"] = {}
+            try:
+                flags = await self.api.async_get_zone_effect_flags(zone)
+                zone["effect_flags"] = flags
+            except Exception as err:
+                _LOGGER.warning(
+                    "Failed to fetch effect flags for zone %d: %s", idx, err
+                )
+                zone["effect_flags"] = {}
+            zone["available_modes"] = self.api.resolve_zone_available_modes(
+                zone,
+                zone.get("effect_flags", {}),
+            )
+            try:
+                roll = await self.api.async_get_zone_roll_effects(zone)
+                zone["available_roll_effects"] = roll
+            except Exception as err:
+                _LOGGER.warning(
+                    "Failed to fetch roll effects for zone %d: %s", idx, err
+                )
+                zone["available_roll_effects"] = {}
 
         await self.api.set_time(self.hass.config.time_zone)
         
-        # _LOGGER.warning("Zones %r", self._zones)
         # Update coordinator data
         self.async_set_updated_data({"zones": self._zones})
 

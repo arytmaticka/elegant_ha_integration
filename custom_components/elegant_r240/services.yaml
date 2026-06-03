@@ -12,3 +12,56 @@ reset_zone_defaults:
           max: 23
           mode: box
 
+set_zone_effects:
+  name: Set zone effects
+  description: >
+    Set one or more effects on a zone. Provide either a list of effect
+    names, resolved through that zone's dictionary, or a list of raw
+    effect IDs. IDs are preferred when controlling zones of different
+    controller types because names are not shared across types. Any
+    previously active effects are replaced.
+  fields:
+    zone_index:
+      name: Zone index
+      description: The zone index (0-23) to set effects on.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 23
+          mode: box
+    effects:
+      name: Effects (names)
+      description: List of effect names to activate. Ignored if effect_ids is provided.
+      required: false
+      selector:
+        object:
+    effect_ids:
+      name: Effect IDs
+      description: List of raw effect IDs, preferred for mixed controller types.
+      required: false
+      selector:
+        object:
+
+set_zone_roll_effect:
+  name: Set zone roll effect
+  description: Set the rollout effect used by a zone.
+  fields:
+    zone_index:
+      name: Zone index
+      description: The zone index (0-23) to set the roll effect on.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 23
+          mode: box
+    roll_effect_id:
+      name: Roll effect ID
+      description: The raw roll effect ID for this zone.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box

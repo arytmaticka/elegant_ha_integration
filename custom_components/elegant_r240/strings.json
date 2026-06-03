@@ -37,11 +37,11 @@
         },
         "data_description": {
           "time_sync_enabled": "Sync controller clock when it drifts from HA.",
-          "time_sync_threshold": "Maximum allowed time drift before syncing (2–60 s).",
+          "time_sync_threshold": "Maximum allowed time drift before syncing (2-60 s).",
           "poll_enabled": "Periodically fetch full state from the controller as a safety net.",
-          "poll_interval": "How often to fetch full state (60–86400 s).",
+          "poll_interval": "How often to fetch full state (60-86400 s).",
           "debounce_enabled": "After detecting an external change (browser, remote), fetch full state to catch multi-zone changes.",
-          "external_change_debounce": "Wait this long after the last external change before fetching (0.1–10.0 s)."
+          "external_change_debounce": "Wait this long after the last external change before fetching (0.1-10.0 s)."
         }
       }
     }
@@ -54,6 +54,38 @@
         "zone_index": {
           "name": "Zone index",
           "description": "The zone index (0-23) to reset."
+        }
+      }
+    },
+    "set_zone_effects": {
+      "name": "Set zone effects",
+      "description": "Set one or more effects on a zone. Prefer effect_ids when possible; names are not shared across controller types.",
+      "fields": {
+        "zone_index": {
+          "name": "Zone index",
+          "description": "The zone index (0-23) to set effects on."
+        },
+        "effects": {
+          "name": "Effects (names)",
+          "description": "List of effect names resolved via zone's dictionary. Ignored if effect_ids is provided."
+        },
+        "effect_ids": {
+          "name": "Effect IDs",
+          "description": "List of raw effect IDs. Preferred for mixed controller types."
+        }
+      }
+    },
+    "set_zone_roll_effect": {
+      "name": "Set zone roll effect",
+      "description": "Set the rollout effect used by a zone.",
+      "fields": {
+        "zone_index": {
+          "name": "Zone index",
+          "description": "The zone index (0-23) to set the roll effect on."
+        },
+        "roll_effect_id": {
+          "name": "Roll effect ID",
+          "description": "The raw roll effect ID for this zone."
         }
       }
     }

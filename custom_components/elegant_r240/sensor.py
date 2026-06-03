@@ -23,11 +23,18 @@ from .coordinator import ElegantCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 
+def _controller_name(coordinator: ElegantCoordinator) -> str:
+    """Return a stable display name for the controller device."""
+    serial = coordinator.user_settings.get("sn")
+    serial_text = "" if serial is None else str(serial)
+    return f"Elegant-{serial_text[-4:]}" if serial_text else "Elegant"
+
+
 def _hub_device_info(coordinator: ElegantCoordinator) -> DeviceInfo:
     """Return DeviceInfo for the main controller hub."""
     return DeviceInfo(
         identifiers={(DOMAIN, coordinator.mac)},
-        name=f"Elegant-{coordinator.user_settings.get('sn', '')[-4:]}",
+        name=_controller_name(coordinator),
         manufacturer="Elegant",
         model="LED Controller",
         configuration_url=f"http://{coordinator.host}",
