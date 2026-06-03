@@ -46,7 +46,7 @@ MODE_NAMES_PL = {
     MODE_KEY_WHITE: "Biale",
     MODE_KEY_DOUBLE: "Dwa kolory",
     MODE_KEY_TRIPLE: "Trzy kolory",
-    MODE_KEY_RAINBOW: "T�cza",
+    MODE_KEY_RAINBOW: "Tęcza",
     MODE_KEY_AUTO_CHANGE: "Automatyczna zmiana",
 }
 

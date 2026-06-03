@@ -129,7 +129,7 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(device_id)
         self._abort_if_unique_id_configured(updates={CONF_HOST: host, CONF_PORT: port})
 
-        # Zamiast od razu tworzyć wpis, zapisz dane i pokaż formularz potwierdzenia
+        # Store discovery data and show a confirmation form instead of creating the entry immediately.
         self._host = host
         self._port = port
         self._name = discovery_info.name
@@ -164,7 +164,7 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             host = user_input[CONF_HOST]
-            client = ElegantApiClient(host)
+            client = ElegantApiClient(self.hass,host)
 
             try:
                 await client.connect()
