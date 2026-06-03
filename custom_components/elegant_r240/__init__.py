@@ -205,24 +205,24 @@ def _register_services(hass: HomeAssistant) -> None:
                 return
 
     if not reset_registered:
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_RESET_ZONE_DEFAULTS,
-        handle_reset_zone_defaults,
-        schema=RESET_ZONE_SCHEMA,
-    )
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RESET_ZONE_DEFAULTS,
+            handle_reset_zone_defaults,
+            schema=RESET_ZONE_SCHEMA,
+        )
 
     # --- set_zone_effects service ---
 
     effects_registered = hass.services.has_service(DOMAIN, SERVICE_SET_ZONE_EFFECTS)
 
     async def handle_set_zone_effects(call: ServiceCall) -> None:
-        """Handle set_zone_effects service call — set multiple effects on a zone.
+        """Handle set_zone_effects service call - set multiple effects on a zone.
 
         Accepts either:
-          - effect_ids: list[int]  — real effect IDs (== bit positions, 0–127).
+          - effect_ids: list[int]  - real effect IDs (== bit positions, 0-127).
             Preferred: bypasses name lookup, works across controller types.
-          - effects:    list[str]  — effect names, resolved via zone's
+          - effects:    list[str]  - effect names, resolved via zone's
             available_effects dictionary.
         """
         zone_index = call.data[ATTR_ZONE_INDEX]
@@ -246,7 +246,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 _LOGGER.warning("Zone index %d out of range", zone_index)
                 return
 
-            # Path 1 — explicit IDs (preferred)
+            # Path 1 - explicit IDs (preferred)
             if effect_ids_raw is not None:
                 ids = list(effect_ids_raw)
                 if not ids:
@@ -258,7 +258,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 await coordinator.async_set_zone(zone_index, scenes=scenes)
                 return
 
-            # Path 2 — resolve names via THIS zone's dictionary only
+            # Path 2 - resolve names via THIS zone's dictionary only
             # (names are NOT shared across controller types)
             if not effect_names:
                 await coordinator.async_set_zone(
@@ -330,7 +330,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     """Register the Elegant Effects Card by copying JS to config/www/.
 
     The config/www/ directory is always served by HA under /local/.
-    This is the most reliable method — no register_static_path needed.
+    This is the most reliable method - no register_static_path needed.
     """
     frontend_key = f"{DOMAIN}_frontend_{CARD_JS_VERSION}"
     if hass.data.get(frontend_key):
@@ -375,7 +375,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
         _LOGGER.warning(
             "Elegant Effects Card: Lovelace resource registration failed: %s. "
             "Add %s as a Lovelace resource (type: module) manually in "
-            "Settings › Dashboards › Resources.",
+            "Settings > Dashboards > Resources.",
             err,
             CARD_JS_URL,
         )

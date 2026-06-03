@@ -324,7 +324,7 @@ def _encode_effect_ids_to_scenes(effect_ids: list[int]) -> list[int]:
     scenes = [0] * words_needed
     for effect_id in effect_ids:
         if effect_id < 0 or effect_id > SCENES_MAX_ID:
-        raise ValueError(f"effect_id out of range: {effect_id}")
+            raise ValueError(f"effect_id out of range: {effect_id}")
         scenes[effect_id // 32] |= 1 << (effect_id % 32)
     return scenes
 
@@ -426,7 +426,7 @@ class ElegantLight(CoordinatorEntity[ElegantCoordinator], LightEntity):
         ):
             return ColorMode.COLOR_TEMP
         if ColorMode.HS in supported:
-        return ColorMode.HS
+            return ColorMode.HS
         if ColorMode.COLOR_TEMP in supported:
             return ColorMode.COLOR_TEMP
         if ColorMode.BRIGHTNESS in supported:
@@ -597,7 +597,7 @@ class ElegantLight(CoordinatorEntity[ElegantCoordinator], LightEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on with optional parameters."""
         params: dict[str, Any] = {}
-        
+
         if ATTR_EFFECT in kwargs:
             selected_name = kwargs[ATTR_EFFECT]
 
