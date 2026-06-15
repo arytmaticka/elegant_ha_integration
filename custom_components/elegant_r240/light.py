@@ -303,10 +303,20 @@ def _decode_scenes_to_effect_ids(scenes: list[int] | tuple[int, ...]) -> list[in
     return effect_ids
 
 
-def _encode_effect_id_to_scenes(effect_id: int) -> list[int]:
-    """Encode a single effect_id into a scenes bitfield (4..8 uint32 words)."""
-    return _encode_effect_ids_to_scenes([effect_id])
+# def _encode_effect_id_to_scenes(effect_id: int) -> list[int]:
+#     """Encode a single effect_id into a scenes bitfield (4..8 uint32 words)."""
+#     return _encode_effect_ids_to_scenes([effect_id])
 
+def _encode_effect_id_to_scenes(effect_id: int) -> list[int]:
+    """Encode single effect_id (0..127) into 4x uint32 bitfield."""
+    if effect_id < 0 or effect_id > 127:
+        raise ValueError(f"effect_id out of range: {effect_id}")
+
+    scenes = [0, 0, 0, 0]
+    word_idx = effect_id // 32
+    bit_idx = effect_id % 32
+    scenes[word_idx] = 1 << bit_idx
+    return scenes
 
 def _encode_effect_ids_to_scenes(effect_ids: list[int]) -> list[int]:
     """Encode a list of effect_ids into a scenes bitfield.

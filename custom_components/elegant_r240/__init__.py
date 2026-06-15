@@ -467,13 +467,16 @@ def _schedule_frontend_resource_retries(hass: HomeAssistant) -> None:
         return
     hass.data[retry_key] = True
 
+    def _retry_register(_now) -> None:
+        hass.create_task(
+            _async_register_lovelace_resource(hass, CARD_JS_URL)
+        )
+
     for delay in (2, 10, 30):
         async_call_later(
             hass,
             delay,
-            lambda _now, _delay=delay: hass.async_create_task(
-                _async_register_lovelace_resource(hass, CARD_JS_URL)
-            ),
+            _retry_register,
         )
 
 
