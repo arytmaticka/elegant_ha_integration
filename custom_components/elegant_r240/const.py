@@ -1,6 +1,6 @@
 """Constants for the Elegant LED Controller integration."""
 
-DOMAIN = "elegant"
+DOMAIN = "elegant_r240"
 
 # Default host
 DEFAULT_HOST = "elegant.lan"
