@@ -56,6 +56,31 @@ _LOGGER = logging.getLogger(__name__)
 ZEROCONF_API_PATH = "/zeroconfig"
 ZEROCONF_API_TIMEOUT = 10
 
+
+def _text_value(value: Any) -> str:
+    """Return a normalized text value from a Zeroconf/API field."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="ignore").strip()
+    return str(value).strip()
+
+
+def _last_four_chars(value: Any) -> str:
+    """Return the last four characters from a serial-like value."""
+    return _text_value(value)[-4:]
+
+
+def _controller_label(
+    serial: Any = None,
+    fallback_id: Any = None,
+    default: str = "Elegant",
+) -> str:
+    """Return the short label shown next to an Elegant controller."""
+    suffix = _last_four_chars(serial) or _last_four_chars(fallback_id)
+    return f"Elegant-{suffix}" if suffix else default
+
+
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST, default=DEFAULT_HOST): str,
@@ -96,13 +121,13 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
             properties,
         )
 
-        device_id = properties.get("id")
-        if isinstance(device_id, bytes):
-            device_id = device_id.decode()
+        device_id = _text_value(properties.get("id"))
+        serial = _text_value(properties.get("sn"))
 
-        if not device_id:
+        if not device_id or not serial:
             _LOGGER.debug(
-                "No 'id' in TXT records for %s, fetching from HTTP API", host
+                "Missing 'id' or 'sn' in TXT records for %s, fetching from HTTP API",
+                host,
             )
             try:
                 session = async_get_clientsession(self.hass)
@@ -112,15 +137,31 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
                 ) as resp:
                     resp.raise_for_status()
                     info = await resp.json()
-                    device_id = str(info.get("id", ""))
+                    device_id = device_id or _text_value(info.get("id"))
+                    serial = serial or _text_value(info.get("sn"))
             except (aiohttp.ClientError, TimeoutError, ValueError) as err:
-                _LOGGER.error(
-                    "Failed to fetch device ID from %s%s: %s",
+                _LOGGER.debug(
+                    "Failed to fetch Zeroconf details from %s%s: %s",
                     host,
                     ZEROCONF_API_PATH,
                     err,
                 )
-                return self.async_abort(reason="cannot_connect")
+
+        if not device_id or not serial:
+            client = ElegantApiClient(self.hass, host)
+            try:
+                await client.connect()
+                settings = await client.get_user_settings()
+            except (ConnectionError, TimeoutError, OSError) as err:
+                _LOGGER.debug("Failed to fetch serial from %s: %s", host, err)
+            else:
+                serial = serial or _text_value(settings.get("sn"))
+                if not device_id:
+                    device_id = (
+                        _text_value(settings.get("mac")).replace(":", "").lower()
+                    )
+            finally:
+                await client.disconnect()
 
         if not device_id:
             _LOGGER.error("Could not determine device ID for %s", host)
@@ -132,8 +173,9 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
         # Zamiast od razu tworzyć wpis, zapisz dane i pokaż formularz potwierdzenia
         self._host = host
         self._port = port
-        self._name = discovery_info.name
+        self._name = _controller_label(serial, device_id, discovery_info.name)
         self._device_id = device_id
+        self.context["title_placeholders"] = {"name": self._name}
 
         return await self.async_step_zeroconf_confirm()
 
@@ -164,7 +206,7 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             host = user_input[CONF_HOST]
-            client = ElegantApiClient(host)
+            client = ElegantApiClient(self.hass, host)
 
             try:
                 await client.connect()
@@ -173,14 +215,14 @@ class ElegantConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.error("Failed to connect to %s: %s", host, err)
                 errors["base"] = "cannot_connect"
             else:
-                mac = settings.get("mac", "").replace(":", "").lower()
+                mac = _text_value(settings.get("mac")).replace(":", "").lower()
                 sn = settings.get("sn", "")
 
                 # Use MAC as unique ID
                 await self.async_set_unique_id(mac)
                 self._abort_if_unique_id_configured()
 
-                title = f"Elegant {sn}" if sn else f"Elegant {host}"
+                title = _controller_label(sn, default=f"Elegant {host}")
 
                 return self.async_create_entry(
                     title=title,
