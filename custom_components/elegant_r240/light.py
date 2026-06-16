@@ -366,7 +366,8 @@ class ElegantLight(CoordinatorEntity, LightEntity):
 
         if ATTR_HS_COLOR in kwargs:
             hue, saturation = kwargs[ATTR_HS_COLOR]
-            r, g, b = _hs_to_rgb(hue, saturation)
+            # R240 expects color_1 on the color wheel edge; saturation is separate.
+            r, g, b = _hs_to_rgb(hue, 100)
             # Elegant SEND uses hue in 0-255 scale: elegant_hue = ha_hue * 256 / 360
             elegant_hue = int(hue * ELEGANT_HUE_MAX / 360)
             params["color_1"] = _rgb_to_hex_0x(r, g, b)
